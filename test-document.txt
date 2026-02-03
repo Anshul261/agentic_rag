@@ -1,0 +1,15 @@
+This is a test document for file upload verification.
+
+Key Information:
+- Product: AI Assistant Platform
+- Version: 2.0
+- Release Date: January 2025
+- Features: File upload, document processing, session storage
+
+Test Questions:
+1. What product is this document about?
+2. What is the version number?
+3. When was it released?
+4. What features are mentioned?
+
+This document is used to verify that the file upload functionality is working correctly between the UI-Illuminati frontend and the document agent backend.

@@ -1,0 +1,38 @@
+.env
+converted_docs
+documents
+logs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.log
+*.env
+*.csv
+.DS_Store
+.vscode/
+.idea/
+*.swp
+archive/
+*.swo
+*.bak
+*.tmp
+converted_docs/
+documents/
+logs/
+*.pdf
+# uv.lock
+# .python-version
+# pyproject.toml
+output.txt
+.claude
+node_modules/
+
+*.jpg
+.next
+
+client_secret_398183445172-l83cj61nme1l06ml8oitlv2vvcb93lqd.apps.googleusercontent.com.json
+token.json
+*.db
+db_data/
