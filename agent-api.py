@@ -25,15 +25,20 @@ curl -X POST "http://localhost:7777/projects/{id}/query" \
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
 import tempfile
+import time
 import uuid
+from base64 import b64decode, b64encode
 from io import BytesIO
 from pathlib import Path
 from typing import Optional, Sequence
 
+import jwt as pyjwt
 import PyPDF2
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
@@ -43,6 +48,7 @@ from agno.knowledge.reader.pdf_reader import PDFReader
 from agno.media import File
 from agno.models.azure import AzureOpenAI
 from agno.os import AgentOS
+from agno.os.middleware.jwt import JWTMiddleware
 from agno.team import Team
 from agno.tools import Toolkit
 from agno.tools.duckduckgo import DuckDuckGoTools
@@ -262,6 +268,67 @@ def init_project_tables():
 init_project_tables()
 
 
+# ============================================================================
+# Auth Setup (users table + JWT helpers using stdlib only)
+# ============================================================================
+
+AUTH_SECRET = os.getenv("SECRET_KEY", "")
+if not AUTH_SECRET:
+    raise ValueError("SECRET_KEY env var is required for auth")
+
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_HOURS = 8
+
+
+def init_auth_tables():
+    """Create users table in SQLite."""
+    conn = sqlite3.connect(PROJECTS_DB)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+    """)
+    conn.close()
+
+
+init_auth_tables()
+
+
+def hash_password(password: str) -> str:
+    """Hash password using PBKDF2-HMAC-SHA256 (stdlib, no bcrypt needed)."""
+    salt = os.urandom(32)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100_000)
+    return b64encode(salt + key).decode()
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Verify password against stored PBKDF2 hash."""
+    decoded = b64decode(stored_hash)
+    salt = decoded[:32]
+    stored_key = decoded[32:]
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100_000)
+    return hmac.compare_digest(key, stored_key)
+
+
+def create_jwt(user_id: str, email: str) -> str:
+    """Create a JWT using pyjwt (same library the middleware uses for validation)."""
+    now = int(time.time())
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "scopes": ["agents:read", "agents:run", "teams:read", "teams:run",
+                    "sessions:read", "sessions:write", "sessions:delete"],
+        "iat": now,
+        "exp": now + JWT_EXPIRY_HOURS * 3600,
+    }
+    return pyjwt.encode(payload, AUTH_SECRET, algorithm=JWT_ALGORITHM)
+
+
 def get_project_knowledge(project_id: str) -> Knowledge:
     """Create an AGNO Knowledge object backed by PgVector for a specific project."""
     return Knowledge(
@@ -409,6 +476,25 @@ agent_os = AgentOS(
 
 app = agent_os.get_app()
 
+# Add JWT middleware manually so we can use HS256 and exclude auth routes
+app.add_middleware(
+    JWTMiddleware,
+    verification_keys=[AUTH_SECRET],
+    algorithm="HS256",
+    authorization=True,
+    excluded_route_paths=[
+        "/",
+        "/health",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/docs/oauth2-redirect",
+        "/v1/auth/signup",
+        "/v1/auth/login",
+        "/info",
+    ],
+)
+
 # ============================================================================
 # Custom Endpoints
 # ============================================================================
@@ -456,6 +542,75 @@ async def api_info():
             },
         }
     )
+
+
+# ============================================================================
+# Auth Endpoints
+# ============================================================================
+
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@custom_router.post("/v1/auth/signup")
+async def signup(req: SignupRequest):
+    """Create a new user account and return a JWT."""
+    if len(req.password) < 8:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Password must be at least 8 characters"},
+        )
+
+    conn = sqlite3.connect(PROJECTS_DB)
+    existing = conn.execute(
+        "SELECT id FROM users WHERE email = ?", (req.email,)
+    ).fetchone()
+    if existing:
+        conn.close()
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "An account with this email already exists"},
+        )
+
+    user_id = str(uuid.uuid4())
+    pw_hash = hash_password(req.password)
+    conn.execute(
+        "INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)",
+        (user_id, req.email, pw_hash, req.name),
+    )
+    conn.commit()
+    conn.close()
+
+    token = create_jwt(user_id, req.email)
+    return JSONResponse(content={"access_token": token, "user_id": user_id})
+
+
+@custom_router.post("/v1/auth/login")
+async def login(req: LoginRequest):
+    """Authenticate a user and return a JWT."""
+    conn = sqlite3.connect(PROJECTS_DB)
+    conn.row_factory = sqlite3.Row
+    user = conn.execute(
+        "SELECT * FROM users WHERE email = ?", (req.email,)
+    ).fetchone()
+    conn.close()
+
+    if not user or not verify_password(req.password, user["password_hash"]):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid email or password"},
+        )
+
+    token = create_jwt(user["id"], user["email"])
+    return JSONResponse(content={"access_token": token, "user_id": user["id"]})
 
 
 # ============================================================================

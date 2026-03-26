@@ -12,8 +12,6 @@ import {
     createSession,
     listTeams,
     getDefaultTeam,
-    API_BASE_URL,
-    getUserId,
     listProjects,
     createProject as apiCreateProject,
     getProject as apiGetProject,
@@ -30,6 +28,7 @@ import {
     listProjectSessions,
     getProjectSessionRuns,
 } from "@/lib/api";
+import { useAuthStore } from "@/lib/store/auth-store";
 import {
     Send,
     Sparkles,
@@ -48,6 +47,7 @@ import {
     FileText,
     Trash2,
     ChevronDown,
+    LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -105,7 +105,7 @@ export function ChatInterface() {
         null,
     );
     const [projects, setProjects] = useState<Project[]>([]);
-    const [userId] = useState<string>(() => getUserId());
+    const logout = useAuthStore((s) => s.logout);
     const [uploadingFiles, setUploadingFiles] = useState(false);
     const [showProjectFiles, setShowProjectFiles] = useState(true);
     const [projectSessions, setProjectSessions] = useState<ProjectSession[]>(
@@ -138,7 +138,7 @@ export function ChatInterface() {
     // Load projects from API
     const loadProjects = async () => {
         try {
-            const data = await listProjects(userId);
+            const data = await listProjects();
             setProjects(
                 data.map((p) => ({
                     id: p.id,
@@ -226,7 +226,7 @@ export function ChatInterface() {
 
     useEffect(() => {
         loadProjects();
-    }, [userId]);
+    }, []);
 
     // Load teams on component mount
     useEffect(() => {
@@ -402,7 +402,7 @@ export function ChatInterface() {
                 }
 
                 const response = await fetch(
-                    `${API_BASE_URL}/teams/${currentTeam.id}/runs`,
+                    `/api/agentOS/teams/${currentTeam.id}/runs`,
                     {
                         method: "POST",
                         body: formData,
@@ -592,7 +592,7 @@ export function ChatInterface() {
                 const errorMessage: Message = {
                     id: (Date.now() + 1).toString(),
                     role: "assistant",
-                    content: `Error: ${error instanceof Error ? error.message : "Unknown error"}. Please make sure the API is running at ${API_BASE_URL}`,
+                    content: `Error: ${error instanceof Error ? error.message : "Unknown error"}. Please make sure the API is running.`,
                 };
                 setMessages((prev) => [...prev, errorMessage]);
             } finally {
@@ -725,7 +725,6 @@ export function ChatInterface() {
         if (!newProjectName.trim()) return;
 
         const result = await apiCreateProject(
-            userId,
             newProjectName,
             newProjectDescription,
         );
@@ -1226,6 +1225,14 @@ export function ChatInterface() {
                             ) : (
                                 <Moon className="w-4 h-4 text-muted-foreground" />
                             )}
+                        </button>
+                        <button
+                            onClick={() => logout().then(() => window.location.href = "/login")}
+                            className="p-2 rounded-sm border border-border hover:bg-secondary transition-colors"
+                            aria-label="Sign out"
+                            title="Sign out"
+                        >
+                            <LogOut className="w-4 h-4 text-muted-foreground" />
                         </button>
                         <span className="font-mono text-xs text-muted-foreground uppercase tracking-widest">
                             v1.0

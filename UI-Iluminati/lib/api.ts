@@ -1,13 +1,10 @@
 /**
- * API Configuration for AgentOS Integration
- * Handles dynamic communication with teams from the backend
+ * API Client — routes all calls through the BFF proxy at /api/agentOS
+ * The BFF attaches JWT Bearer tokens from the encrypted session cookie.
+ * The browser never sees or handles JWTs directly.
  */
 
-// API Configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:7777";
-
-// Export for use in components
-export { API_BASE_URL };
+const BFF_BASE = "/api/agentOS";
 
 // ============================================================================
 // Team Discovery
@@ -35,12 +32,9 @@ export interface TeamMemberInfo {
     } | null;
 }
 
-/**
- * List all available teams from the backend
- */
 export async function listTeams(): Promise<TeamInfo[]> {
     try {
-        const response = await fetch(`${API_BASE_URL}/teams`);
+        const response = await fetch(`${BFF_BASE}/teams`);
         if (!response.ok) return [];
         const data = await response.json();
         return Array.isArray(data) ? data : [];
@@ -50,9 +44,6 @@ export async function listTeams(): Promise<TeamInfo[]> {
     }
 }
 
-/**
- * Get the default team (first available team)
- */
 export async function getDefaultTeam(): Promise<TeamInfo | null> {
     const teams = await listTeams();
     return teams.length > 0 ? teams[0] : null;
@@ -65,14 +56,6 @@ export interface AgentResponse {
     error?: string;
 }
 
-/**
- * Send a message to a team (general chat mode)
- * @param teamId - The team ID to send the message to
- * @param message - User's message
- * @param files - Optional files to upload with the message
- * @param sessionId - Optional session ID for conversation history
- * @returns Team's response
- */
 export async function sendMessageToTeam(
     teamId: string,
     message: string,
@@ -82,39 +65,22 @@ export async function sendMessageToTeam(
     try {
         const formData = new FormData();
         formData.append("message", message);
-        formData.append("stream", "false"); // Non-streaming for simplicity
+        formData.append("stream", "false");
 
         if (sessionId) {
             formData.append("session_id", sessionId);
         }
 
-        // Attach files if provided
         if (files && files.length > 0) {
-            console.log(
-                `[API] Uploading ${files.length} file(s):`,
-                files.map((f) => f.name),
-            );
             files.forEach((file) => {
                 formData.append("files", file);
-                console.log(
-                    `[API] Added file: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`,
-                );
             });
-        } else {
-            console.log("[API] No files to upload");
         }
 
-        console.log(
-            `[API] Sending request to: ${API_BASE_URL}/teams/${teamId}/runs`,
-        );
-        console.log(`[API] Session ID: ${sessionId || "none"}`);
-
-        const response = await fetch(`${API_BASE_URL}/teams/${teamId}/runs`, {
+        const response = await fetch(`${BFF_BASE}/teams/${teamId}/runs`, {
             method: "POST",
             body: formData,
         });
-
-        console.log(`[API] Response status: ${response.status}`);
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -124,9 +90,6 @@ export async function sendMessageToTeam(
         }
 
         const data = await response.json();
-
-        // Extract content from the response
-        // AGNO returns: { content: "...", run_id: "...", ... }
         return {
             content: data.content || data.message || "No response from agent",
             run_id: data.run_id,
@@ -144,30 +107,13 @@ export async function sendMessageToTeam(
     }
 }
 
-/**
- * Check if the API is healthy
- */
 export async function checkAPIHealth(): Promise<boolean> {
     try {
-        const response = await fetch(`${API_BASE_URL}/health`);
+        const response = await fetch(`${BFF_BASE}/teams`);
         return response.ok;
     } catch (error) {
         console.error("API health check failed:", error);
         return false;
-    }
-}
-
-/**
- * Get API information
- */
-export async function getAPIInfo(): Promise<any> {
-    try {
-        const response = await fetch(`${API_BASE_URL}/info`);
-        if (!response.ok) return null;
-        return await response.json();
-    } catch (error) {
-        console.error("Failed to get API info:", error);
-        return null;
     }
 }
 
@@ -201,16 +147,13 @@ export interface SessionRun {
     metrics?: any;
 }
 
-/**
- * List all sessions for the team
- */
 export async function listSessions(
     page: number = 1,
     limit: number = 20,
 ): Promise<SessionsResponse | null> {
     try {
         const response = await fetch(
-            `${API_BASE_URL}/sessions?type=team&page=${page}&limit=${limit}&sort_by=updated_at&sort_order=desc`,
+            `${BFF_BASE}/sessions?type=team&page=${page}&limit=${limit}&sort_by=updated_at&sort_order=desc`,
         );
         if (!response.ok) return null;
         return await response.json();
@@ -220,13 +163,10 @@ export async function listSessions(
     }
 }
 
-/**
- * Get session details including chat history
- */
 export async function getSession(sessionId: string): Promise<any> {
     try {
         const response = await fetch(
-            `${API_BASE_URL}/sessions/${sessionId}?type=team`,
+            `${BFF_BASE}/sessions/${sessionId}?type=team`,
         );
         if (!response.ok) return null;
         return await response.json();
@@ -236,13 +176,10 @@ export async function getSession(sessionId: string): Promise<any> {
     }
 }
 
-/**
- * Get all runs (messages) for a session
- */
 export async function getSessionRuns(sessionId: string): Promise<SessionRun[]> {
     try {
         const response = await fetch(
-            `${API_BASE_URL}/sessions/${sessionId}/runs?type=team`,
+            `${BFF_BASE}/sessions/${sessionId}/runs?type=team`,
         );
         if (!response.ok) return [];
         const data = await response.json();
@@ -253,18 +190,13 @@ export async function getSessionRuns(sessionId: string): Promise<SessionRun[]> {
     }
 }
 
-/**
- * Create a new session
- * @param teamId - The team ID to associate with the session
- * @param sessionName - Optional custom session name
- */
 export async function createSession(
     teamId: string,
     sessionName?: string,
 ): Promise<string | null> {
     try {
         const sessionId = `session_${Date.now()}`;
-        const response = await fetch(`${API_BASE_URL}/sessions?type=team`, {
+        const response = await fetch(`${BFF_BASE}/sessions?type=team`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -278,7 +210,6 @@ export async function createSession(
         });
 
         if (!response.ok) {
-            // Session might auto-create on first run, return the ID anyway
             return sessionId;
         }
 
@@ -286,43 +217,19 @@ export async function createSession(
         return data.session_id || sessionId;
     } catch (error) {
         console.error("Failed to create session:", error);
-        // Return a new session ID anyway - it will be created on first message
         return `session_${Date.now()}`;
     }
 }
 
-/**
- * Get team details including members
- * @param teamId - The team ID to get details for
- */
 export async function getTeamDetails(teamId: string): Promise<TeamInfo | null> {
     try {
-        const response = await fetch(`${API_BASE_URL}/teams/${teamId}`);
+        const response = await fetch(`${BFF_BASE}/teams/${teamId}`);
         if (!response.ok) return null;
         return await response.json();
     } catch (error) {
         console.error("Failed to get team details:", error);
         return null;
     }
-}
-
-// ============================================================================
-// User Identity
-// ============================================================================
-
-const USER_ID_KEY = "agno_user_id";
-
-/**
- * Get or create a persistent user ID stored in localStorage
- */
-export function getUserId(): string {
-    if (typeof window === "undefined") return "anonymous";
-    let userId = localStorage.getItem(USER_ID_KEY);
-    if (!userId) {
-        userId = crypto.randomUUID();
-        localStorage.setItem(USER_ID_KEY, userId);
-    }
-    return userId;
 }
 
 // ============================================================================
@@ -351,18 +258,17 @@ export interface ProjectDetail extends ProjectInfo {
 }
 
 /**
- * Create a new project
+ * Create a new project. userId is injected by the BFF from the session.
  */
 export async function createProject(
-    userId: string,
     name: string,
     description: string = "",
 ): Promise<ProjectInfo | null> {
     try {
-        const response = await fetch(`${API_BASE_URL}/projects`, {
+        const response = await fetch(`${BFF_BASE}/projects`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ user_id: userId, name, description }),
+            body: JSON.stringify({ name, description }),
         });
         if (!response.ok) return null;
         return await response.json();
@@ -373,13 +279,11 @@ export async function createProject(
 }
 
 /**
- * List all projects for a user
+ * List all projects for the authenticated user. userId is injected by the BFF.
  */
-export async function listProjects(userId: string): Promise<ProjectInfo[]> {
+export async function listProjects(): Promise<ProjectInfo[]> {
     try {
-        const response = await fetch(
-            `${API_BASE_URL}/projects?user_id=${encodeURIComponent(userId)}`,
-        );
+        const response = await fetch(`${BFF_BASE}/projects`);
         if (!response.ok) return [];
         const data = await response.json();
         return Array.isArray(data) ? data : [];
@@ -389,14 +293,11 @@ export async function listProjects(userId: string): Promise<ProjectInfo[]> {
     }
 }
 
-/**
- * Get project details including file list
- */
 export async function getProject(
     projectId: string,
 ): Promise<ProjectDetail | null> {
     try {
-        const response = await fetch(`${API_BASE_URL}/projects/${projectId}`);
+        const response = await fetch(`${BFF_BASE}/projects/${projectId}`);
         if (!response.ok) return null;
         return await response.json();
     } catch (error) {
@@ -405,12 +306,9 @@ export async function getProject(
     }
 }
 
-/**
- * Delete a project
- */
 export async function deleteProject(projectId: string): Promise<boolean> {
     try {
-        const response = await fetch(`${API_BASE_URL}/projects/${projectId}`, {
+        const response = await fetch(`${BFF_BASE}/projects/${projectId}`, {
             method: "DELETE",
         });
         return response.ok;
@@ -420,9 +318,6 @@ export async function deleteProject(projectId: string): Promise<boolean> {
     }
 }
 
-/**
- * Upload files to a project (ingests into PgVector knowledge base)
- */
 export async function uploadProjectFiles(
     projectId: string,
     files: File[],
@@ -432,7 +327,7 @@ export async function uploadProjectFiles(
         files.forEach((file) => formData.append("files", file));
 
         const response = await fetch(
-            `${API_BASE_URL}/projects/${projectId}/files`,
+            `${BFF_BASE}/projects/${projectId}/files`,
             {
                 method: "POST",
                 body: formData,
@@ -446,16 +341,13 @@ export async function uploadProjectFiles(
     }
 }
 
-/**
- * Delete a file from a project
- */
 export async function deleteProjectFile(
     projectId: string,
     fileId: string,
 ): Promise<boolean> {
     try {
         const response = await fetch(
-            `${API_BASE_URL}/projects/${projectId}/files/${fileId}`,
+            `${BFF_BASE}/projects/${projectId}/files/${fileId}`,
             { method: "DELETE" },
         );
         return response.ok;
@@ -477,15 +369,12 @@ export interface ProjectSession {
     updated_at: string;
 }
 
-/**
- * List all sessions for a project
- */
 export async function listProjectSessions(
     projectId: string,
 ): Promise<ProjectSession[]> {
     try {
         const response = await fetch(
-            `${API_BASE_URL}/projects/${projectId}/sessions`,
+            `${BFF_BASE}/projects/${projectId}/sessions`,
         );
         if (!response.ok) return [];
         const data = await response.json();
@@ -496,16 +385,13 @@ export async function listProjectSessions(
     }
 }
 
-/**
- * Get all runs (messages) for a project session
- */
 export async function getProjectSessionRuns(
     projectId: string,
     sessionId: string,
 ): Promise<SessionRun[]> {
     try {
         const response = await fetch(
-            `${API_BASE_URL}/projects/${projectId}/sessions/${sessionId}/runs`,
+            `${BFF_BASE}/projects/${projectId}/sessions/${sessionId}/runs`,
         );
         if (!response.ok) return [];
         const data = await response.json();
@@ -516,9 +402,6 @@ export async function getProjectSessionRuns(
     }
 }
 
-/**
- * Query a project's knowledge base (returns fetch Response for SSE streaming)
- */
 export async function queryProject(
     projectId: string,
     message: string,
@@ -531,7 +414,7 @@ export async function queryProject(
         formData.append("session_id", sessionId);
     }
 
-    return fetch(`${API_BASE_URL}/projects/${projectId}/query`, {
+    return fetch(`${BFF_BASE}/projects/${projectId}/query`, {
         method: "POST",
         body: formData,
     });
