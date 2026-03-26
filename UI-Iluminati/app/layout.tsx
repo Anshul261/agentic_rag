@@ -32,8 +32,8 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
-      <body className={`${playfair.variable} ${ibmPlexMono.variable} ${geistMono.variable} font-sans antialiased`}>
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${playfair.variable} ${ibmPlexMono.variable} ${geistMono.variable} font-sans antialiased`} suppressHydrationWarning>
         {children}
         <Analytics />
       </body>
