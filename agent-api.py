@@ -35,10 +35,6 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 import PyPDF2
-from dotenv import load_dotenv
-
-load_dotenv()
-
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.embedder.ollama import OllamaEmbedder
@@ -51,10 +47,16 @@ from agno.team import Team
 from agno.tools import Toolkit
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.vectordb.pgvector import PgVector, SearchType
+from dotenv import load_dotenv
+from fastapi import APIRouter, Form, Query, UploadFile
+from fastapi import File as FastAPIFile
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 # ============================================================================
 # Document Processing Tool
 # ============================================================================
+load_dotenv()
 
 
 class DocumentTools(Toolkit):
@@ -410,11 +412,6 @@ app = agent_os.get_app()
 # ============================================================================
 # Custom Endpoints
 # ============================================================================
-
-from fastapi import APIRouter, Form, Query, UploadFile
-from fastapi import File as FastAPIFile
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
 
 custom_router = APIRouter()
 
