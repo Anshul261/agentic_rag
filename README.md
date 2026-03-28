@@ -371,3 +371,19 @@ For issues and questions:
 - Review API documentation at `/docs`
 - Check backend logs for errors
 - Verify environment configuration
+
+# Agent Sandbox
+
+To start the sandbox server:
+# 1. Pull the sandbox image (if not already)
+docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1
+# 2. Configure sandbox (copy example config)
+cp $(uv python)/lib/python3.11/site-packages/example.config.toml ~/.sandbox.toml
+# 3. Set environment variables in agentic_rag/.env:
+SANDBOX_DOMAIN=localhost:8080
+# SANDBOX_API_KEY=    # only if you enabled api_key in ~/.sandbox.toml
+# 4. Start the sandbox server:
+source .venv/bin/activate
+opensandbox-server
+The server will bind to 127.0.0.1:8080. Verify:
+curl http://localhost:8080/health
