@@ -19,6 +19,7 @@ import {
     uploadProjectFiles,
     deleteProjectFile,
     queryProject,
+    querySandbox,
     type Session,
     type SessionRun,
     type TeamInfo,
@@ -48,6 +49,7 @@ import {
     Trash2,
     ChevronDown,
     LogOut,
+    Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -97,7 +99,7 @@ export function ChatInterface() {
     );
     const [uploadedFiles, setUploadedFiles] = useState<File[]>([]); // Files for general chat
 
-    const [activeTab, setActiveTab] = useState<"chats" | "projects">("chats");
+    const [activeTab, setActiveTab] = useState<"chats" | "projects" | "sandbox">("chats");
     const [showNewProjectModal, setShowNewProjectModal] = useState(false);
     const [newProjectName, setNewProjectName] = useState("");
     const [newProjectDescription, setNewProjectDescription] = useState("");
@@ -697,6 +699,97 @@ export function ChatInterface() {
                 // Reload project sessions so new session appears in sidebar
                 loadProjectSessions(selectedProject.id);
             }
+        } else if (activeTab === "sandbox") {
+            // Sandbox mode - execute Python code via SSE
+            try {
+                const response = await querySandbox(currentInput, sessionId);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                if (response.body) {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let accumulatedContent = "";
+                    let buffer = "";
+
+                    const aiMessageId = (Date.now() + 1).toString();
+                    setMessages((prev) => [
+                        ...prev,
+                        { id: aiMessageId, role: "assistant", content: "" },
+                    ]);
+
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split("\n");
+                            buffer = lines.pop() || "";
+
+                            let currentEvent = "";
+                            for (const line of lines) {
+                                if (line.startsWith("event: ")) {
+                                    currentEvent = line.slice(7).trim();
+                                } else if (line.startsWith("data: ")) {
+                                    try {
+                                        const data = JSON.parse(line.slice(6));
+                                        if (
+                                            currentEvent === "RunContent" &&
+                                            data.content
+                                        ) {
+                                            accumulatedContent += data.content;
+                                            setMessages((prev) =>
+                                                prev.map((msg) =>
+                                                    msg.id === aiMessageId
+                                                        ? {
+                                                              ...msg,
+                                                              content:
+                                                                  accumulatedContent,
+                                                          }
+                                                        : msg,
+                                                ),
+                                            );
+                                        } else if (
+                                            currentEvent === "RunError" &&
+                                            data.error
+                                        ) {
+                                            accumulatedContent += `\n\nError: ${data.error}`;
+                                            setMessages((prev) =>
+                                                prev.map((msg) =>
+                                                    msg.id === aiMessageId
+                                                        ? {
+                                                              ...msg,
+                                                              content:
+                                                                  accumulatedContent,
+                                                          }
+                                                        : msg,
+                                                ),
+                                            );
+                                        }
+                                    } catch {
+                                        // skip parse errors
+                                    }
+                                }
+                            }
+                        }
+                    } finally {
+                        reader.releaseLock();
+                    }
+                }
+            } catch (error) {
+                console.error("Error querying sandbox:", error);
+                const errorMessage: Message = {
+                    id: (Date.now() + 1).toString(),
+                    role: "assistant",
+                    content: `Error: ${error instanceof Error ? error.message : "Unknown error"}. Please make sure the sandbox is running.`,
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+            } finally {
+                setIsLoading(false);
+            }
         } else if (!currentTeam) {
             // No team available
             const errorMessage: Message = {
@@ -875,6 +968,24 @@ export function ChatInterface() {
                             )}
                         >
                             Projects
+                        </button>
+                        <button
+                            onClick={() => {
+                                setActiveTab("sandbox");
+                                setSelectedProject(null);
+                                setMessages([]);
+                                setSessionId(`sandbox_${Date.now()}`);
+                            }}
+                            className={cn(
+                                "flex-1 font-mono text-xs uppercase tracking-wider py-2 rounded-sm transition-colors",
+                                activeTab === "sandbox"
+                                    ? "bg-card border border-border text-foreground"
+                                    : "text-muted-foreground",
+                            )}
+                            title="Sandbox - Execute Python code"
+                        >
+                            <Terminal className="w-3 h-3 inline mr-1" />
+                            Run
                         </button>
                     </div>
                 </div>
@@ -1192,6 +1303,20 @@ export function ChatInterface() {
                                     </h1>
                                     <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">
                                         {selectedProject.description}
+                                    </p>
+                                </div>
+                            </>
+                        ) : activeTab === "sandbox" ? (
+                            <>
+                                <div className="w-8 h-8 rounded-sm bg-green-600 flex items-center justify-center">
+                                    <Terminal className="w-4 h-4 text-primary-foreground" />
+                                </div>
+                                <div>
+                                    <h1 className="font-serif text-2xl font-bold text-green-600 tracking-tight">
+                                        Sandbox
+                                    </h1>
+                                    <p className="font-mono text-xs text-muted-foreground">
+                                        Execute Python code
                                     </p>
                                 </div>
                             </>
@@ -1596,47 +1721,48 @@ export function ChatInterface() {
                                         }
                                     }}
                                 />
-                                <button
-                                    type="button"
-                                    onClick={handleFileUpload}
-                                    className={cn(
-                                        "p-2 rounded-sm hover:bg-secondary transition-colors relative",
-                                        uploadedFiles.length > 0 &&
-                                            "bg-primary/10",
-                                    )}
-                                    aria-label="Attach file"
-                                    title={
-                                        uploadedFiles.length > 0
-                                            ? `${uploadedFiles.length} file(s) attached`
-                                            : "Attach file"
-                                    }
-                                >
-                                    <Paperclip
+                                {activeTab !== "sandbox" && (
+                                    <button
+                                        type="button"
+                                        onClick={handleFileUpload}
                                         className={cn(
-                                            "w-4 h-4",
-                                            uploadedFiles.length > 0
-                                                ? "text-primary"
-                                                : "text-muted-foreground",
+                                            "p-2 rounded-sm hover:bg-secondary transition-colors relative",
+                                            uploadedFiles.length > 0 &&
+                                                "bg-primary/10",
                                         )}
-                                    />
-                                    {uploadedFiles.length > 0 && (
-                                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary text-primary-foreground text-xs font-mono rounded-full flex items-center justify-center">
-                                            {uploadedFiles.length}
-                                        </span>
-                                    )}
-                                </button>
+                                        aria-label="Attach file"
+                                        title={
+                                            uploadedFiles.length > 0
+                                                ? `${uploadedFiles.length} file(s) attached`
+                                                : "Attach file"
+                                        }
+                                    >
+                                        <Paperclip
+                                            className={cn(
+                                                "w-4 h-4",
+                                                uploadedFiles.length > 0
+                                                    ? "text-primary"
+                                                    : "text-muted-foreground",
+                                            )}
+                                        />
+                                        {uploadedFiles.length > 0 && (
+                                            <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary text-primary-foreground text-xs font-mono rounded-full flex items-center justify-center">
+                                                {uploadedFiles.length}
+                                            </span>
+                                        )}
+                                    </button>
+                                )}
                                 <Button
                                     type="submit"
                                     size="sm"
                                     disabled={
                                         !input.trim() ||
                                         isLoading ||
-                                        loadingTeams ||
-                                        !currentTeam
+                                        (loadingTeams || (!currentTeam && activeTab !== "sandbox"))
                                     }
                                     className="font-mono text-xs uppercase tracking-wider rounded-sm bg-primary hover:bg-primary/90 disabled:opacity-50"
                                     title={
-                                        !currentTeam
+                                        !currentTeam && activeTab !== "sandbox"
                                             ? "No team available"
                                             : undefined
                                     }
@@ -1646,7 +1772,9 @@ export function ChatInterface() {
                             </div>
                         </div>
                         <p className="font-mono text-xs text-muted-foreground text-center mt-3 uppercase tracking-widest">
-                            Press Enter to send • Shift + Enter for new line
+                            {activeTab === "sandbox"
+                                ? "Press Enter to execute Python code"
+                                : "Press Enter to send • Shift + Enter for new line"}
                         </p>
                     </form>
                 </div>

@@ -419,3 +419,36 @@ export async function queryProject(
         body: formData,
     });
 }
+
+// ============================================================================
+// Sandbox
+// ============================================================================
+
+export async function querySandbox(
+    message: string,
+    sessionId?: string,
+): Promise<Response> {
+    const formData = new FormData();
+    formData.append("message", message);
+    formData.append("stream", "true");
+    if (sessionId) {
+        formData.append("session_id", sessionId);
+    }
+
+    return fetch(`${BFF_BASE}/sandbox/query`, {
+        method: "POST",
+        body: formData,
+    });
+}
+
+export async function closeSandbox(): Promise<boolean> {
+    try {
+        const response = await fetch(`${BFF_BASE}/sandbox/close`, {
+            method: "POST",
+        });
+        return response.ok;
+    } catch (error) {
+        console.error("Failed to close sandbox:", error);
+        return false;
+    }
+}

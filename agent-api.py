@@ -34,6 +34,7 @@ import tempfile
 import time
 import uuid
 from base64 import b64decode, b64encode
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Optional, Sequence
@@ -57,6 +58,8 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Form, Query, UploadFile
 from fastapi import File as FastAPIFile
 from fastapi.responses import JSONResponse, StreamingResponse
+from opensandbox import Sandbox
+from opensandbox.config import ConnectionConfig
 from pydantic import BaseModel
 
 # ============================================================================
@@ -205,6 +208,101 @@ class DocumentTools(Toolkit):
 
 
 # ============================================================================
+# Sandbox Setup
+# ============================================================================
+
+SANDBOX_DOMAIN = os.getenv("SANDBOX_DOMAIN", "localhost:8080")
+SANDBOX_API_KEY = os.getenv("SANDBOX_API_KEY")
+SANDBOX_IMAGE = os.getenv(
+    "SANDBOX_IMAGE",
+    "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1",
+)
+
+SANDBOX_OUTPUT_DIR = Path.home() / "sandbox_outputs"
+SANDBOX_OUTPUT_DIR.mkdir(exist_ok=True)
+
+_sandbox_instance: Optional[Sandbox] = None
+
+
+async def get_sandbox() -> Sandbox:
+    global _sandbox_instance
+    if _sandbox_instance is None:
+        config = ConnectionConfig(
+            domain=SANDBOX_DOMAIN,
+            api_key=SANDBOX_API_KEY,
+            request_timeout=timedelta(seconds=120),
+        )
+        _sandbox_instance = await Sandbox.create(
+            SANDBOX_IMAGE, connection_config=config
+        )
+        print(f"[SANDBOX] Created sandbox: {_sandbox_instance.id}")
+    return _sandbox_instance
+
+
+async def close_sandbox():
+    global _sandbox_instance
+    if _sandbox_instance:
+        await _sandbox_instance.kill()
+        await _sandbox_instance.close()
+        _sandbox_instance = None
+        print("[SANDBOX] Closed sandbox")
+
+
+class SandboxTools(Toolkit):
+    def __init__(self, sandbox: Sandbox, **kwargs):
+        self.sandbox = sandbox
+        tools = [
+            self.run_python,
+            self.run_script,
+            self.install_packages,
+            self.download_file,
+        ]
+        super().__init__(name="sandbox_tools", tools=tools, **kwargs)
+
+    async def run_python(self, code: str) -> str:
+        execution = await self.sandbox.commands.run(f"python3 -c {repr(code)}")
+        stdout = "\n".join(msg.text for msg in execution.logs.stdout).strip()
+        stderr = "\n".join(msg.text for msg in execution.logs.stderr).strip()
+
+        if execution.error:
+            error_line = f"{execution.error.name}: {execution.error.value}"
+            stderr = "\n".join(filter(None, [stderr, f"[error] {error_line}"]))
+
+        if stderr:
+            return f"{stdout}\n[stderr]\n{stderr}".strip()
+        return stdout or "(no output)"
+
+    async def run_script(self, filename: str, code: str) -> str:
+        await self.sandbox.files.write_file(filename, code)
+        execution = await self.sandbox.commands.run(f"python3 {filename}")
+        stdout = "\n".join(msg.text for msg in execution.logs.stdout).strip()
+        stderr = "\n".join(msg.text for msg in execution.logs.stderr).strip()
+
+        if execution.error:
+            error_line = f"{execution.error.name}: {execution.error.value}"
+            stderr = "\n".join(filter(None, [stderr, f"[error] {error_line}"]))
+
+        if stderr:
+            return f"{stdout}\n[stderr]\n{stderr}".strip()
+        return stdout or "(no output)"
+
+    async def install_packages(self, packages: str) -> str:
+        execution = await self.sandbox.commands.run(f"pip install {packages} -q")
+        stdout = "\n".join(msg.text for msg in execution.logs.stdout).strip()
+        stderr = "\n".join(msg.text for msg in execution.logs.stderr).strip()
+        if execution.error:
+            return f"Install failed: {execution.error.name}: {execution.error.value}\n{stderr}"
+        return stdout or "Installed successfully"
+
+    async def download_file(self, sandbox_path: str, local_filename: str = "") -> str:
+        name = local_filename or Path(sandbox_path).name
+        local_path = SANDBOX_OUTPUT_DIR / name
+        data = await self.sandbox.files.read_bytes(sandbox_path)
+        local_path.write_bytes(data)
+        return f"Saved to {local_path} ({len(data):,} bytes)"
+
+
+# ============================================================================
 # Database Setup
 # ============================================================================
 
@@ -221,7 +319,7 @@ db = SqliteDb(
 PROJECTS_DB = "agent_sessions.db"
 PGVECTOR_DB_URL = os.getenv(
     "PGVECTOR_DB_URL",
-    "postgresql+psycopg://postgres:postgres@localhost:5432/rag_db",
+    "postgresql+psycopg://postgres:postgres@localhost:5433/rag_db",
 )
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text-v2-moe")
@@ -321,8 +419,15 @@ def create_jwt(user_id: str, email: str) -> str:
     payload = {
         "sub": user_id,
         "email": email,
-        "scopes": ["agents:read", "agents:run", "teams:read", "teams:run",
-                    "sessions:read", "sessions:write", "sessions:delete"],
+        "scopes": [
+            "agents:read",
+            "agents:run",
+            "teams:read",
+            "teams:run",
+            "sessions:read",
+            "sessions:write",
+            "sessions:delete",
+        ],
         "iat": now,
         "exp": now + JWT_EXPIRY_HOURS * 3600,
     }
@@ -365,11 +470,11 @@ def extract_text_from_bytes(content: bytes, filename: str) -> str:
 # ============================================================================
 
 llm = AzureOpenAI(
-    id=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1-mini"),
+    id=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME_5", "gpt-4.1-mini"),
     api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     api_version=os.getenv("OPENAI_API_VERSION", "2024-02-15-preview"),
-    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-    azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT_5"),
+    azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME_5"),
 )
 
 # ============================================================================
@@ -463,6 +568,36 @@ general_team = Team(
     debug_mode=True,
 )
 
+sandbox_agent: Optional[Agent] = None
+
+
+async def get_sandbox_agent() -> Agent:
+    global sandbox_agent
+    if sandbox_agent is None:
+        sandbox = await get_sandbox()
+        sandbox_agent = Agent(
+            id="sandbox-agent",
+            name="Sandbox Execution Agent",
+            model=llm,
+            tools=[SandboxTools(sandbox)],
+            instructions=[
+                "You are a helpful assistant with access to a Python code execution environment (sandbox).",
+                "When asked to compute, analyze, or demonstrate something, write and run Python code using the sandbox tools.",
+                "The sandbox persists across the conversation - variables, imports, and files you create remain available.",
+                "Always show the code you run and explain the output.",
+                "When you produce output files (images, spreadsheets, etc.), use the download_file tool to save them to the user's machine.",
+                "You can install packages using install_packages if needed.",
+                "Use run_python for quick one-liners and run_script for multi-line scripts.",
+            ],
+            db=db,
+            add_history_to_context=True,
+            num_history_runs=10,
+            markdown=True,
+            debug_mode=True,
+        )
+    return sandbox_agent
+
+
 # ============================================================================
 # AgentOS Setup
 # ============================================================================
@@ -513,10 +648,14 @@ async def health_check():
     return JSONResponse(
         content={
             "status": "healthy",
-            "service": "Document Q&A with Projects",
-            "agents": ["doc-agent", "duckduckgo-agent"],
+            "service": "Document Q&A with Projects + Sandbox",
+            "agents": ["doc-agent", "duckduckgo-agent", "sandbox-agent"],
             "database": "SQLite (agent_sessions.db) + PgVector",
             "session_storage": "enabled",
+            "sandbox": {
+                "domain": SANDBOX_DOMAIN,
+                "image": SANDBOX_IMAGE,
+            },
         }
     )
 
@@ -526,8 +665,8 @@ async def api_info():
     """API information."""
     return JSONResponse(
         content={
-            "name": "Document Q&A API with Projects",
-            "description": "Upload documents, create projects with knowledge bases, and ask questions",
+            "name": "Document Q&A API with Projects + Sandbox",
+            "description": "Upload documents, create projects with knowledge bases, ask questions, and execute Python code in sandbox",
             "endpoints": {
                 "agent_runs": "POST /agents/doc-agent/runs",
                 "projects_create": "POST /projects",
@@ -537,6 +676,8 @@ async def api_info():
                 "projects_upload": "POST /projects/{id}/files",
                 "projects_remove_file": "DELETE /projects/{id}/files/{file_id}",
                 "projects_query": "POST /projects/{id}/query",
+                "sandbox_query": "POST /sandbox/query",
+                "sandbox_close": "POST /sandbox/close",
                 "health": "GET /health",
                 "docs": "GET /docs",
             },
@@ -598,9 +739,7 @@ async def login(req: LoginRequest):
     """Authenticate a user and return a JWT."""
     conn = sqlite3.connect(PROJECTS_DB)
     conn.row_factory = sqlite3.Row
-    user = conn.execute(
-        "SELECT * FROM users WHERE email = ?", (req.email,)
-    ).fetchone()
+    user = conn.execute("SELECT * FROM users WHERE email = ?", (req.email,)).fetchone()
     conn.close()
 
     if not user or not verify_password(req.password, user["password_hash"]):
@@ -1034,6 +1173,78 @@ async def query_project(
                 "session_id": session_id,
             }
         )
+
+
+# ============================================================================
+# Sandbox Endpoints
+# ============================================================================
+
+
+@custom_router.post("/sandbox/query")
+async def query_sandbox(
+    message: str = Form(...),
+    session_id: str = Form(None),
+    stream: str = Form("true"),
+):
+    """Query the sandbox agent with Python code execution capabilities."""
+    try:
+        sandbox_agent_instance = await get_sandbox_agent()
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"error": f"Failed to initialize sandbox: {str(e)}"},
+        )
+
+    if stream.lower() == "true":
+
+        async def event_stream():
+            try:
+                run_response = sandbox_agent_instance.arun(
+                    message,
+                    session_id=session_id,
+                    stream=True,
+                )
+                async for chunk in run_response:
+                    if hasattr(chunk, "content") and chunk.content:
+                        event_data = json.dumps({"content": chunk.content})
+                        yield f"event: RunContent\ndata: {event_data}\n\n"
+                    if hasattr(chunk, "event") and chunk.event:
+                        event_data = json.dumps({"event": str(chunk.event)})
+                        yield f"event: RunEvent\ndata: {event_data}\n\n"
+            except Exception as e:
+                error_data = json.dumps({"error": str(e)})
+                yield f"event: RunError\ndata: {error_data}\n\n"
+                print(f"[SANDBOX QUERY] Error: {e}")
+                import traceback
+
+                traceback.print_exc()
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    else:
+        run_response = sandbox_agent_instance.run(message, session_id=session_id)
+        return JSONResponse(
+            content={
+                "content": run_response.content
+                if hasattr(run_response, "content")
+                else str(run_response),
+                "session_id": session_id,
+            }
+        )
+
+
+@custom_router.post("/sandbox/close")
+async def close_sandbox_endpoint():
+    """Close the sandbox instance."""
+    await close_sandbox()
+    return JSONResponse(content={"status": "sandbox closed"})
 
 
 app.include_router(custom_router)

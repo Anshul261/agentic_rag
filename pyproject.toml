@@ -1,0 +1,21 @@
+[project]
+name = "agentic-rag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "agno>=2.5.11",
+    "fastapi>=0.135.2",
+    "langchain-openai>=1.1.12",
+    "opensandbox>=0.1.6",
+    "psycopg>=3.3.3",
+    "psycopg2-binary>=2.9.11",
+    "pydantic>=2.12.5",
+    "pyjwt>=2.12.1",
+    "pypdf2>=3.0.1",
+    "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.22",
+    "sqlalchemy>=2.0.48",
+    "uvicorn>=0.42.0",
+]
