@@ -46,14 +46,14 @@ export function SignupForm() {
 
     return (
         <div className="w-full max-w-sm space-y-8">
-            <div className="text-center space-y-2">
-                <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                    <Sparkles className="w-6 h-6 text-primary" />
+            <div className="text-center space-y-3">
+                <div className="mx-auto w-12 h-12 rounded-sm border border-primary/30 flex items-center justify-center">
+                    <Sparkles className="w-5 h-5 text-primary" />
                 </div>
-                <h1 className="font-serif text-2xl font-bold tracking-tight">
+                <h1 className="font-sans text-2xl font-semibold tracking-tight text-foreground">
                     Create an account
                 </h1>
-                <p className="text-sm text-muted-foreground font-mono">
+                <p className="text-xs text-muted-foreground font-mono uppercase tracking-widest">
                     Get started with your AI assistant
                 </p>
             </div>
@@ -69,7 +69,7 @@ export function SignupForm() {
                         placeholder="Your name"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
-                        className="font-mono"
+                        className="font-mono text-sm"
                     />
                 </div>
 
@@ -84,7 +84,7 @@ export function SignupForm() {
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         required
-                        className="font-mono"
+                        className="font-mono text-sm"
                     />
                 </div>
 
@@ -100,7 +100,7 @@ export function SignupForm() {
                         onChange={(e) => setPassword(e.target.value)}
                         required
                         minLength={8}
-                        className="font-mono"
+                        className="font-mono text-sm"
                     />
                 </div>
 
@@ -116,7 +116,7 @@ export function SignupForm() {
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         required
                         minLength={8}
-                        className="font-mono"
+                        className="font-mono text-sm"
                     />
                 </div>
 
@@ -133,7 +133,7 @@ export function SignupForm() {
                 </Button>
             </form>
 
-            <p className="text-center text-sm text-muted-foreground font-mono">
+            <p className="text-center text-xs text-muted-foreground font-mono">
                 Already have an account?{" "}
                 <Link
                     href="/login"

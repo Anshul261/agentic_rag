@@ -44,8 +44,10 @@ import PyPDF2
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.embedder.ollama import OllamaEmbedder
+from agno.knowledge.embedder.huggingface import HuggingfaceCustomEmbedder
 from agno.knowledge.knowledge import Knowledge
 from agno.knowledge.reader.pdf_reader import PDFReader
+from agno.knowledge.chunking.document import DocumentChunking
 from agno.media import File
 from agno.models.azure import AzureOpenAI
 from agno.os import AgentOS
@@ -324,6 +326,8 @@ PGVECTOR_DB_URL = os.getenv(
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text-v2-moe")
 EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "768"))
+HF_EMBEDDING_MODEL = os.getenv("HF_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+HF_EMBEDDING_DIMENSIONS = int(os.getenv("HF_EMBEDDING_DIMENSIONS", "384"))
 
 
 def init_project_tables():
@@ -441,12 +445,13 @@ def get_project_knowledge(project_id: str) -> Knowledge:
             table_name=f"project_{project_id.replace('-', '_')}",
             db_url=PGVECTOR_DB_URL,
             search_type=SearchType.hybrid,
-            embedder=OllamaEmbedder(
-                id=EMBEDDING_MODEL,
-                dimensions=EMBEDDING_DIMENSIONS,
-                host=OLLAMA_HOST,
+            embedder=HuggingfaceCustomEmbedder(
+                id=HF_EMBEDDING_MODEL,
+                dimensions=HF_EMBEDDING_DIMENSIONS,
+                api_key=os.getenv("HUGGINGFACE_API_KEY"),
             ),
         ),
+        max_results=30,
     )
 
 
@@ -927,9 +932,10 @@ async def upload_project_files(
                 tmp_path = tmp.name
 
             is_pdf = suffix.lower() == ".pdf"
+            pdf_chunking = DocumentChunking(chunk_size=2000, overlap=200)
             if is_pdf:
                 await knowledge.add_content_async(
-                    path=tmp_path, name=filename, reader=PDFReader()
+                    path=tmp_path, name=filename, reader=PDFReader(chunking_strategy=pdf_chunking)
                 )
             else:
                 await knowledge.add_content_async(path=tmp_path, name=filename)
@@ -1119,9 +1125,11 @@ async def query_project(
         search_knowledge=True,
         instructions=[
             f"You are answering questions about the project '{project['name']}'.",
-            "Search the knowledge base to find relevant information before answering.",
-            "Reference specific parts of the documents when possible.",
+            "Always search the knowledge base thoroughly before answering. Run multiple searches with varied queries to ensure you cover ALL documents in the knowledge base.",
+            "When asked to list files, search with broad generic terms like 'fraud', 'detection', 'analysis', 'review' to retrieve results from every document.",
+            "Reference specific parts of the documents when possible, including the document name.",
             "If the knowledge base doesn't contain relevant information, say so clearly.",
+            "You have full access to all uploaded project documents. Analyze them without limits.",
             "Be concise and helpful.",
         ],
         db=db,

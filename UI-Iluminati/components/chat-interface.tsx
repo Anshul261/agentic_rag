@@ -940,20 +940,20 @@ export function ChatInterface() {
                     <Button
                         variant="outline"
                         onClick={handleNewChat}
-                        className="w-full justify-start gap-2 font-mono text-xs uppercase tracking-wider rounded-sm bg-transparent border-border hover:bg-sidebar-accent"
+                        className="w-full justify-start gap-2 font-mono text-xs uppercase tracking-wider rounded-sm bg-transparent border-border hover:bg-sidebar-accent hover:border-primary/40 transition-colors"
                     >
-                        <Plus className="w-4 h-4" />
+                        <Plus className="w-4 h-4 text-primary" />
                         New Chat
                     </Button>
 
-                    <div className="flex gap-1 p-1 bg-sidebar-accent rounded-sm border border-sidebar-border">
+                    <div className="flex gap-0.5 p-0.5 bg-sidebar-accent rounded-sm border border-sidebar-border">
                         <button
                             onClick={() => setActiveTab("chats")}
                             className={cn(
-                                "flex-1 font-mono text-xs uppercase tracking-wider py-2 rounded-sm transition-colors",
+                                "flex-1 font-mono text-[10px] uppercase tracking-widest py-2 rounded-sm transition-all duration-200",
                                 activeTab === "chats"
-                                    ? "bg-card border border-border text-foreground"
-                                    : "text-muted-foreground",
+                                    ? "bg-card border border-border text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground/70",
                             )}
                         >
                             Chats
@@ -961,10 +961,10 @@ export function ChatInterface() {
                         <button
                             onClick={() => setActiveTab("projects")}
                             className={cn(
-                                "flex-1 font-mono text-xs uppercase tracking-wider py-2 rounded-sm transition-colors",
+                                "flex-1 font-mono text-[10px] uppercase tracking-widest py-2 rounded-sm transition-all duration-200",
                                 activeTab === "projects"
-                                    ? "bg-card border border-border text-foreground"
-                                    : "text-muted-foreground",
+                                    ? "bg-card border border-border text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground/70",
                             )}
                         >
                             Projects
@@ -977,10 +977,10 @@ export function ChatInterface() {
                                 setSessionId(`sandbox_${Date.now()}`);
                             }}
                             className={cn(
-                                "flex-1 font-mono text-xs uppercase tracking-wider py-2 rounded-sm transition-colors",
+                                "flex-1 font-mono text-[10px] uppercase tracking-widest py-2 rounded-sm transition-all duration-200",
                                 activeTab === "sandbox"
-                                    ? "bg-card border border-border text-foreground"
-                                    : "text-muted-foreground",
+                                    ? "bg-card border border-border text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground/70",
                             )}
                             title="Sandbox - Execute Python code"
                         >
@@ -1081,7 +1081,7 @@ export function ChatInterface() {
                                                             )}
                                                         />
                                                         <div className="flex-1 min-w-0">
-                                                            <p className="font-serif text-sm font-medium text-sidebar-foreground truncate">
+                                                            <p className="font-mono text-xs font-medium text-sidebar-foreground truncate">
                                                                 {
                                                                     ps.session_name
                                                                 }
@@ -1160,7 +1160,7 @@ export function ChatInterface() {
                                                         )}
                                                     />
                                                     <div className="flex-1 min-w-0">
-                                                        <p className="font-serif text-sm font-medium text-sidebar-foreground truncate">
+                                                        <p className="font-mono text-xs font-medium text-sidebar-foreground truncate">
                                                             {
                                                                 session.session_name
                                                             }
@@ -1222,7 +1222,7 @@ export function ChatInterface() {
                                             <div className="flex items-start gap-3">
                                                 <FolderOpen className="w-4 h-4 text-primary mt-0.5 shrink-0" />
                                                 <div className="flex-1 min-w-0">
-                                                    <p className="font-serif text-sm font-medium text-sidebar-foreground truncate">
+                                                    <p className="font-mono text-xs font-medium text-sidebar-foreground truncate">
                                                         {project.name}
                                                     </p>
                                                     <p className="font-mono text-xs text-muted-foreground truncate mt-1">
@@ -1279,7 +1279,7 @@ export function ChatInterface() {
             </button>
 
             <div className="flex flex-col flex-1 min-w-0">
-                <header className="flex items-center justify-between px-6 py-4 border-b border-border">
+                <header className="flex items-center justify-between px-6 py-3 border-b border-border bg-background">
                     <div className="flex items-center gap-3">
                         {selectedProject ? (
                             <>
@@ -1298,39 +1298,39 @@ export function ChatInterface() {
                                     <ChevronLeft className="w-4 h-4 text-muted-foreground" />
                                 </button>
                                 <div>
-                                    <h1 className="font-serif text-2xl font-bold text-primary tracking-tight">
+                                    <h1 className="font-mono text-lg font-semibold text-foreground tracking-tight">
                                         {selectedProject.name}
                                     </h1>
-                                    <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">
+                                    <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
                                         {selectedProject.description}
                                     </p>
                                 </div>
                             </>
                         ) : activeTab === "sandbox" ? (
                             <>
-                                <div className="w-8 h-8 rounded-sm bg-green-600 flex items-center justify-center">
-                                    <Terminal className="w-4 h-4 text-primary-foreground" />
+                                <div className="w-7 h-7 rounded-sm border border-primary/40 flex items-center justify-center">
+                                    <Terminal className="w-3.5 h-3.5 text-primary" />
                                 </div>
                                 <div>
-                                    <h1 className="font-serif text-2xl font-bold text-green-600 tracking-tight">
+                                    <h1 className="font-mono text-lg font-semibold text-foreground tracking-tight">
                                         Sandbox
                                     </h1>
-                                    <p className="font-mono text-xs text-muted-foreground">
+                                    <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
                                         Execute Python code
                                     </p>
                                 </div>
                             </>
                         ) : (
                             <>
-                                <div className="w-8 h-8 rounded-sm bg-primary flex items-center justify-center">
-                                    <Sparkles className="w-4 h-4 text-primary-foreground" />
+                                <div className="w-7 h-7 rounded-sm border border-primary/40 flex items-center justify-center">
+                                    <Sparkles className="w-3.5 h-3.5 text-primary" />
                                 </div>
                                 <div>
-                                    <h1 className="font-serif text-2xl font-bold text-primary tracking-tight">
-                                        {currentTeam?.name || "AI Assistant"}
+                                    <h1 className="font-mono text-lg font-semibold text-foreground tracking-tight">
+                                        {currentTeam?.name || "UI-Illuminati"}
                                     </h1>
                                     {currentTeam && (
-                                        <p className="font-mono text-xs text-muted-foreground">
+                                        <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
                                             {currentTeam.members?.length || 0}{" "}
                                             team members
                                         </p>
@@ -1339,27 +1339,27 @@ export function ChatInterface() {
                             </>
                         )}
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                         <button
                             onClick={() => setIsDark(!isDark)}
-                            className="p-2 rounded-sm border border-border hover:bg-secondary transition-colors"
+                            className="p-2 rounded-sm border border-border hover:bg-secondary hover:border-border/80 transition-colors"
                             aria-label="Toggle theme"
                         >
                             {isDark ? (
-                                <Sun className="w-4 h-4 text-muted-foreground" />
+                                <Sun className="w-3.5 h-3.5 text-muted-foreground" />
                             ) : (
-                                <Moon className="w-4 h-4 text-muted-foreground" />
+                                <Moon className="w-3.5 h-3.5 text-muted-foreground" />
                             )}
                         </button>
                         <button
                             onClick={() => logout().then(() => window.location.href = "/login")}
-                            className="p-2 rounded-sm border border-border hover:bg-secondary transition-colors"
+                            className="p-2 rounded-sm border border-border hover:bg-secondary hover:border-border/80 transition-colors"
                             aria-label="Sign out"
                             title="Sign out"
                         >
-                            <LogOut className="w-4 h-4 text-muted-foreground" />
+                            <LogOut className="w-3.5 h-3.5 text-muted-foreground" />
                         </button>
-                        <span className="font-mono text-xs text-muted-foreground uppercase tracking-widest">
+                        <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-widest ml-1">
                             v1.0
                         </span>
                     </div>
@@ -1473,18 +1473,18 @@ export function ChatInterface() {
                 <div className="flex-1 overflow-y-auto px-6 py-8">
                     {messages.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full text-center">
-                            <div className="w-16 h-16 rounded-sm bg-primary/10 flex items-center justify-center mb-6">
-                                <Sparkles className="w-8 h-8 text-primary" />
+                            <div className="w-14 h-14 rounded-sm border border-primary/30 flex items-center justify-center mb-6">
+                                <Sparkles className="w-6 h-6 text-primary" />
                             </div>
-                            <h2 className="font-serif text-4xl font-bold text-primary mb-4 tracking-tight">
-                                {currentTeam?.name || "AI Assistant"}
+                            <h2 className="font-sans text-3xl font-semibold text-foreground mb-3 tracking-tight leading-tight">
+                                {currentTeam?.name || "UI-Illuminati"}
                             </h2>
-                            <p className="font-mono text-sm text-muted-foreground uppercase tracking-widest max-w-md leading-relaxed">
+                            <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest max-w-md leading-relaxed">
                                 {loadingTeams
                                     ? "Loading teams..."
                                     : currentTeam
                                       ? `Team with ${currentTeam.members?.length || 0} specialized agents. Ask me anything to get started.`
-                                      : "Your intelligent conversation partner. Ask me anything to get started."}
+                                      : "Autonomous AI agents at your command. Ask anything to begin."}
                             </p>
                             <div className="mt-8 flex flex-wrap gap-3 justify-center">
                                 {[
@@ -1495,7 +1495,7 @@ export function ChatInterface() {
                                     <button
                                         key={suggestion}
                                         onClick={() => setInput(suggestion)}
-                                        className="font-mono text-xs uppercase tracking-wider px-4 py-2 border border-border rounded-sm hover:bg-secondary hover:border-primary/30 transition-colors flex items-center gap-2 group"
+                                        className="font-mono text-[11px] uppercase tracking-wider px-4 py-2.5 border border-border rounded-sm hover:bg-secondary hover:border-primary/30 transition-all duration-200 flex items-center gap-2 group text-muted-foreground hover:text-foreground"
                                     >
                                         {suggestion}
                                         <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-primary" />
@@ -1516,8 +1516,8 @@ export function ChatInterface() {
                                     )}
                                 >
                                     {message.role === "assistant" && (
-                                        <div className="w-8 h-8 rounded-sm bg-primary flex items-center justify-center shrink-0">
-                                            <Sparkles className="w-4 h-4 text-primary-foreground" />
+                                        <div className="w-7 h-7 rounded-sm border border-primary/30 flex items-center justify-center shrink-0 mt-0.5">
+                                            <Sparkles className="w-3.5 h-3.5 text-primary" />
                                         </div>
                                     )}
                                     <div className="max-w-[70%] space-y-2">
@@ -1525,7 +1525,7 @@ export function ChatInterface() {
                                             className={cn(
                                                 "px-4 py-3 rounded-sm",
                                                 message.role === "user"
-                                                    ? "bg-primary text-primary-foreground"
+                                                    ? "bg-secondary border border-border text-foreground"
                                                     : "bg-card border border-border",
                                             )}
                                         >
@@ -1556,16 +1556,16 @@ export function ChatInterface() {
                                             )}
                                     </div>
                                     {message.role === "user" && (
-                                        <div className="w-8 h-8 rounded-sm bg-muted flex items-center justify-center shrink-0">
-                                            <div className="w-4 h-4 rounded-full bg-primary" />
+                                        <div className="w-7 h-7 rounded-sm border border-border flex items-center justify-center shrink-0 mt-0.5">
+                                            <div className="w-3 h-3 rounded-full bg-primary" />
                                         </div>
                                     )}
                                 </div>
                             ))}
                             {isLoading && (
                                 <div className="flex gap-4">
-                                    <div className="w-8 h-8 rounded-sm bg-primary flex items-center justify-center shrink-0">
-                                        <Sparkles className="w-4 h-4 text-primary-foreground" />
+                                    <div className="w-7 h-7 rounded-sm border border-primary/30 flex items-center justify-center shrink-0">
+                                        <Sparkles className="w-3.5 h-3.5 text-primary" />
                                     </div>
                                     <div className="max-w-[70%] space-y-2">
                                         <div className="px-4 py-3 rounded-sm bg-card border border-border">
@@ -1677,7 +1677,7 @@ export function ChatInterface() {
                                         ? `Ask a question about ${uploadedFiles.length} file(s)...`
                                         : "Type your message here..."
                                 }
-                                className="w-full bg-transparent px-4 py-3 pr-24 font-serif text-sm resize-none focus:outline-none placeholder:text-muted-foreground"
+                                className="w-full bg-transparent px-4 py-3 pr-24 font-mono text-sm resize-none focus:outline-none placeholder:text-muted-foreground"
                                 rows={1}
                                 style={{
                                     minHeight: "52px",
@@ -1784,7 +1784,7 @@ export function ChatInterface() {
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-card border border-border rounded-sm max-w-md w-full p-6">
                         <div className="flex items-center justify-between mb-4">
-                            <h2 className="font-serif text-xl font-bold text-primary">
+                            <h2 className="font-mono text-base font-semibold text-foreground">
                                 Create New Project
                             </h2>
                             <button
@@ -1816,7 +1816,7 @@ export function ChatInterface() {
                                         setNewProjectName(e.target.value)
                                     }
                                     placeholder="Enter project name..."
-                                    className="w-full px-3 py-2 bg-background border border-border rounded-sm font-serif text-sm focus:outline-none focus:border-primary transition-colors"
+                                    className="w-full px-3 py-2 bg-background border border-border rounded-sm font-mono text-sm focus:outline-none focus:border-primary transition-colors"
                                     autoFocus
                                 />
                             </div>
@@ -1835,7 +1835,7 @@ export function ChatInterface() {
                                         setNewProjectDescription(e.target.value)
                                     }
                                     placeholder="Enter project description..."
-                                    className="w-full px-3 py-2 bg-background border border-border rounded-sm font-serif text-sm resize-none focus:outline-none focus:border-primary transition-colors"
+                                    className="w-full px-3 py-2 bg-background border border-border rounded-sm font-mono text-sm resize-none focus:outline-none focus:border-primary transition-colors"
                                     rows={3}
                                 />
                             </div>
