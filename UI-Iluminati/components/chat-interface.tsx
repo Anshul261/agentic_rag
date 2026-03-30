@@ -375,8 +375,199 @@ export function ChatInterface() {
         setCurrentAgentSteps([]);
         setCurrentProgress("");
 
-        // ONLY call the team API in general chat mode (NOT in project mode)
-        if (!selectedProject && currentTeam) {
+        // Route by active tab — sandbox check must come first
+        if (activeTab === "sandbox") {
+            // Sandbox mode - execute Python code via SSE
+            const currentFiles = [...uploadedFiles];
+            setUploadedFiles([]);
+            try {
+                const response = await querySandbox(currentInput, sessionId, currentFiles);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                if (response.body) {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let accumulatedContent = "";
+                    let buffer = "";
+
+                    const aiMessageId = (Date.now() + 1).toString();
+                    setMessages((prev) => [
+                        ...prev,
+                        { id: aiMessageId, role: "assistant", content: "" },
+                    ]);
+
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split("\n");
+                            buffer = lines.pop() || "";
+
+                            let currentEvent = "";
+                            for (const line of lines) {
+                                if (line.startsWith("event: ")) {
+                                    currentEvent = line.slice(7).trim();
+                                } else if (line.startsWith("data: ")) {
+                                    try {
+                                        const data = JSON.parse(line.slice(6));
+                                        if (
+                                            currentEvent === "RunContent" &&
+                                            data.content
+                                        ) {
+                                            accumulatedContent += data.content;
+                                            setMessages((prev) =>
+                                                prev.map((msg) =>
+                                                    msg.id === aiMessageId
+                                                        ? {
+                                                              ...msg,
+                                                              content:
+                                                                  accumulatedContent,
+                                                          }
+                                                        : msg,
+                                                ),
+                                            );
+                                        } else if (
+                                            currentEvent === "RunError" &&
+                                            data.error
+                                        ) {
+                                            accumulatedContent += `\n\nError: ${data.error}`;
+                                            setMessages((prev) =>
+                                                prev.map((msg) =>
+                                                    msg.id === aiMessageId
+                                                        ? {
+                                                              ...msg,
+                                                              content:
+                                                                  accumulatedContent,
+                                                          }
+                                                        : msg,
+                                                ),
+                                            );
+                                        }
+                                    } catch {
+                                        // skip parse errors
+                                    }
+                                }
+                            }
+                        }
+                    } finally {
+                        reader.releaseLock();
+                    }
+                }
+            } catch (error) {
+                console.error("Error querying sandbox:", error);
+                const errorMessage: Message = {
+                    id: (Date.now() + 1).toString(),
+                    role: "assistant",
+                    content: `Error: ${error instanceof Error ? error.message : "Unknown error"}. Please make sure the sandbox is running.`,
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+            } finally {
+                setIsLoading(false);
+            }
+        } else if (selectedProject) {
+            // Project mode - query project knowledge base via SSE
+            try {
+                const response = await queryProject(
+                    selectedProject.id,
+                    currentInput,
+                    sessionId,
+                );
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                if (response.body) {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let accumulatedContent = "";
+                    let buffer = "";
+
+                    const aiMessageId = (Date.now() + 1).toString();
+                    setMessages((prev) => [
+                        ...prev,
+                        { id: aiMessageId, role: "assistant", content: "" },
+                    ]);
+
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split("\n");
+                            buffer = lines.pop() || "";
+
+                            let currentEvent = "";
+                            for (const line of lines) {
+                                if (line.startsWith("event: ")) {
+                                    currentEvent = line.slice(7).trim();
+                                } else if (line.startsWith("data: ")) {
+                                    try {
+                                        const data = JSON.parse(line.slice(6));
+                                        if (
+                                            currentEvent === "RunContent" &&
+                                            data.content
+                                        ) {
+                                            accumulatedContent += data.content;
+                                            setMessages((prev) =>
+                                                prev.map((msg) =>
+                                                    msg.id === aiMessageId
+                                                        ? {
+                                                              ...msg,
+                                                              content:
+                                                                  accumulatedContent,
+                                                          }
+                                                        : msg,
+                                                ),
+                                            );
+                                        } else if (
+                                            currentEvent === "RunError" &&
+                                            data.error
+                                        ) {
+                                            accumulatedContent += `\n\nError: ${data.error}`;
+                                            setMessages((prev) =>
+                                                prev.map((msg) =>
+                                                    msg.id === aiMessageId
+                                                        ? {
+                                                              ...msg,
+                                                              content:
+                                                                  accumulatedContent,
+                                                          }
+                                                        : msg,
+                                                ),
+                                            );
+                                        }
+                                    } catch {
+                                        // skip parse errors
+                                    }
+                                }
+                            }
+                        }
+                    } finally {
+                        reader.releaseLock();
+                    }
+                }
+            } catch (error) {
+                console.error("Error querying project:", error);
+                const errorMessage: Message = {
+                    id: (Date.now() + 1).toString(),
+                    role: "assistant",
+                    content: `Error querying project: ${error instanceof Error ? error.message : "Unknown error"}`,
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+            } finally {
+                setIsLoading(false);
+                // Reload project sessions so new session appears in sidebar
+                loadProjectSessions(selectedProject.id);
+            }
+        } else if (!selectedProject && currentTeam) {
+            // General chat mode - team API
             try {
                 console.log("[UI] Submitting to team:", {
                     team: currentTeam.name,
@@ -386,7 +577,6 @@ export function ChatInterface() {
                     sessionId,
                 });
 
-                // Create FormData for streaming endpoint
                 const formData = new FormData();
                 formData.append("message", currentInput);
                 formData.append("stream", "true");
@@ -396,7 +586,6 @@ export function ChatInterface() {
                     formData.append("session_id", sessionId);
                 }
 
-                // Attach files if provided
                 if (uploadedFiles.length > 0) {
                     uploadedFiles.forEach((file) => {
                         formData.append("files", file);
@@ -415,14 +604,12 @@ export function ChatInterface() {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
 
-                // Handle streaming response
                 if (response.body) {
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder();
                     let accumulatedContent = "";
                     let buffer = "";
 
-                    // Add initial AI message
                     const aiMessageId = (Date.now() + 1).toString();
                     const initialAiMessage: Message = {
                         id: aiMessageId,
@@ -441,7 +628,6 @@ export function ChatInterface() {
                             });
                             buffer += chunk;
 
-                            // Process complete lines from buffer
                             const lines = buffer.split("\n");
                             buffer = lines.pop() || "";
 
@@ -557,7 +743,6 @@ export function ChatInterface() {
                             }
                         }
 
-                        // Streaming complete - attach steps to message
                         setMessages((prev) =>
                             prev.map((msg) =>
                                 msg.id === aiMessageId
@@ -574,7 +759,6 @@ export function ChatInterface() {
                         setCurrentProgress("");
                     }
                 } else {
-                    // Fallback for non-streaming
                     const data = await response.json();
                     const assistantMessage: Message = {
                         id: (Date.now() + 1).toString(),
@@ -587,7 +771,6 @@ export function ChatInterface() {
                     setMessages((prev) => [...prev, assistantMessage]);
                 }
 
-                // Clear uploaded files after sending
                 setUploadedFiles([]);
             } catch (error) {
                 console.error("Error sending message:", error);
@@ -601,194 +784,6 @@ export function ChatInterface() {
                 setIsLoading(false);
                 setCurrentAgentSteps([]);
                 setCurrentProgress("");
-            }
-        } else if (selectedProject) {
-            // Project mode - query project knowledge base via SSE
-            try {
-                const response = await queryProject(
-                    selectedProject.id,
-                    currentInput,
-                    sessionId,
-                );
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                if (response.body) {
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    let accumulatedContent = "";
-                    let buffer = "";
-
-                    const aiMessageId = (Date.now() + 1).toString();
-                    setMessages((prev) => [
-                        ...prev,
-                        { id: aiMessageId, role: "assistant", content: "" },
-                    ]);
-
-                    try {
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) break;
-
-                            buffer += decoder.decode(value, { stream: true });
-                            const lines = buffer.split("\n");
-                            buffer = lines.pop() || "";
-
-                            let currentEvent = "";
-                            for (const line of lines) {
-                                if (line.startsWith("event: ")) {
-                                    currentEvent = line.slice(7).trim();
-                                } else if (line.startsWith("data: ")) {
-                                    try {
-                                        const data = JSON.parse(line.slice(6));
-                                        if (
-                                            currentEvent === "RunContent" &&
-                                            data.content
-                                        ) {
-                                            accumulatedContent += data.content;
-                                            setMessages((prev) =>
-                                                prev.map((msg) =>
-                                                    msg.id === aiMessageId
-                                                        ? {
-                                                              ...msg,
-                                                              content:
-                                                                  accumulatedContent,
-                                                          }
-                                                        : msg,
-                                                ),
-                                            );
-                                        } else if (
-                                            currentEvent === "RunError" &&
-                                            data.error
-                                        ) {
-                                            accumulatedContent += `\n\nError: ${data.error}`;
-                                            setMessages((prev) =>
-                                                prev.map((msg) =>
-                                                    msg.id === aiMessageId
-                                                        ? {
-                                                              ...msg,
-                                                              content:
-                                                                  accumulatedContent,
-                                                          }
-                                                        : msg,
-                                                ),
-                                            );
-                                        }
-                                    } catch {
-                                        // skip parse errors
-                                    }
-                                }
-                            }
-                        }
-                    } finally {
-                        reader.releaseLock();
-                    }
-                }
-            } catch (error) {
-                console.error("Error querying project:", error);
-                const errorMessage: Message = {
-                    id: (Date.now() + 1).toString(),
-                    role: "assistant",
-                    content: `Error querying project: ${error instanceof Error ? error.message : "Unknown error"}`,
-                };
-                setMessages((prev) => [...prev, errorMessage]);
-            } finally {
-                setIsLoading(false);
-                // Reload project sessions so new session appears in sidebar
-                loadProjectSessions(selectedProject.id);
-            }
-        } else if (activeTab === "sandbox") {
-            // Sandbox mode - execute Python code via SSE
-            try {
-                const response = await querySandbox(currentInput, sessionId);
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                if (response.body) {
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    let accumulatedContent = "";
-                    let buffer = "";
-
-                    const aiMessageId = (Date.now() + 1).toString();
-                    setMessages((prev) => [
-                        ...prev,
-                        { id: aiMessageId, role: "assistant", content: "" },
-                    ]);
-
-                    try {
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) break;
-
-                            buffer += decoder.decode(value, { stream: true });
-                            const lines = buffer.split("\n");
-                            buffer = lines.pop() || "";
-
-                            let currentEvent = "";
-                            for (const line of lines) {
-                                if (line.startsWith("event: ")) {
-                                    currentEvent = line.slice(7).trim();
-                                } else if (line.startsWith("data: ")) {
-                                    try {
-                                        const data = JSON.parse(line.slice(6));
-                                        if (
-                                            currentEvent === "RunContent" &&
-                                            data.content
-                                        ) {
-                                            accumulatedContent += data.content;
-                                            setMessages((prev) =>
-                                                prev.map((msg) =>
-                                                    msg.id === aiMessageId
-                                                        ? {
-                                                              ...msg,
-                                                              content:
-                                                                  accumulatedContent,
-                                                          }
-                                                        : msg,
-                                                ),
-                                            );
-                                        } else if (
-                                            currentEvent === "RunError" &&
-                                            data.error
-                                        ) {
-                                            accumulatedContent += `\n\nError: ${data.error}`;
-                                            setMessages((prev) =>
-                                                prev.map((msg) =>
-                                                    msg.id === aiMessageId
-                                                        ? {
-                                                              ...msg,
-                                                              content:
-                                                                  accumulatedContent,
-                                                          }
-                                                        : msg,
-                                                ),
-                                            );
-                                        }
-                                    } catch {
-                                        // skip parse errors
-                                    }
-                                }
-                            }
-                        }
-                    } finally {
-                        reader.releaseLock();
-                    }
-                }
-            } catch (error) {
-                console.error("Error querying sandbox:", error);
-                const errorMessage: Message = {
-                    id: (Date.now() + 1).toString(),
-                    role: "assistant",
-                    content: `Error: ${error instanceof Error ? error.message : "Unknown error"}. Please make sure the sandbox is running.`,
-                };
-                setMessages((prev) => [...prev, errorMessage]);
-            } finally {
-                setIsLoading(false);
             }
         } else if (!currentTeam) {
             // No team available
@@ -991,7 +986,22 @@ export function ChatInterface() {
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4">
-                    {activeTab === "chats" ? (
+                    {activeTab === "sandbox" ? (
+                        <>
+                            <h3 className="font-mono text-xs uppercase tracking-widest text-muted-foreground mb-4">
+                                Sandbox
+                            </h3>
+                            <div className="text-center py-8">
+                                <Terminal className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                                <p className="font-mono text-xs text-muted-foreground">
+                                    Python execution environment
+                                </p>
+                                <p className="font-mono text-xs text-muted-foreground mt-1">
+                                    Upload files or write code to get started
+                                </p>
+                            </div>
+                        </>
+                    ) : activeTab === "chats" ? (
                         <>
                             {selectedProject && (
                                 <button
@@ -1256,11 +1266,13 @@ export function ChatInterface() {
 
                 <div className="p-4 border-t border-sidebar-border">
                     <div className="font-mono text-xs text-muted-foreground uppercase tracking-wider text-center">
-                        {activeTab === "chats"
-                            ? selectedProject
-                                ? `${projectSessions.length} Project Chats`
-                                : `${sessions.length} Conversations`
-                            : `${projects.length} Projects`}
+                        {activeTab === "sandbox"
+                            ? "Sandbox Mode"
+                            : activeTab === "chats"
+                              ? selectedProject
+                                  ? `${projectSessions.length} Project Chats`
+                                  : `${sessions.length} Conversations`
+                              : `${projects.length} Projects`}
                     </div>
                 </div>
             </aside>
@@ -1281,7 +1293,7 @@ export function ChatInterface() {
             <div className="flex flex-col flex-1 min-w-0">
                 <header className="flex items-center justify-between px-6 py-3 border-b border-border bg-background">
                     <div className="flex items-center gap-3">
-                        {selectedProject ? (
+                        {selectedProject && activeTab !== "sandbox" ? (
                             <>
                                 <button
                                     onClick={() => {
@@ -1365,7 +1377,7 @@ export function ChatInterface() {
                     </div>
                 </header>
 
-                {selectedProject && (
+                {selectedProject && activeTab === "projects" && (
                     <div className="border-b border-border bg-card">
                         <div className="max-w-4xl mx-auto">
                             <button
@@ -1474,24 +1486,39 @@ export function ChatInterface() {
                     {messages.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full text-center">
                             <div className="w-14 h-14 rounded-sm border border-primary/30 flex items-center justify-center mb-6">
-                                <Sparkles className="w-6 h-6 text-primary" />
+                                {activeTab === "sandbox" ? (
+                                    <Terminal className="w-6 h-6 text-primary" />
+                                ) : (
+                                    <Sparkles className="w-6 h-6 text-primary" />
+                                )}
                             </div>
                             <h2 className="font-sans text-3xl font-semibold text-foreground mb-3 tracking-tight leading-tight">
-                                {currentTeam?.name || "UI-Illuminati"}
+                                {activeTab === "sandbox"
+                                    ? "Sandbox"
+                                    : currentTeam?.name || "UI-Illuminati"}
                             </h2>
                             <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest max-w-md leading-relaxed">
-                                {loadingTeams
-                                    ? "Loading teams..."
-                                    : currentTeam
-                                      ? `Team with ${currentTeam.members?.length || 0} specialized agents. Ask me anything to get started.`
-                                      : "Autonomous AI agents at your command. Ask anything to begin."}
+                                {activeTab === "sandbox"
+                                    ? "Execute Python code, upload files for analysis, and install packages."
+                                    : loadingTeams
+                                      ? "Loading teams..."
+                                      : currentTeam
+                                        ? `Team with ${currentTeam.members?.length || 0} specialized agents. Ask me anything to get started.`
+                                        : "Autonomous AI agents at your command. Ask anything to begin."}
                             </p>
                             <div className="mt-8 flex flex-wrap gap-3 justify-center">
-                                {[
-                                    "Explain a concept",
-                                    "Write some code",
-                                    "Help me brainstorm",
-                                ].map((suggestion) => (
+                                {(activeTab === "sandbox"
+                                    ? [
+                                          "Analyze an uploaded file",
+                                          "Run a Python script",
+                                          "Install a package",
+                                      ]
+                                    : [
+                                          "Explain a concept",
+                                          "Write some code",
+                                          "Help me brainstorm",
+                                      ]
+                                ).map((suggestion) => (
                                     <button
                                         key={suggestion}
                                         onClick={() => setInput(suggestion)}
@@ -1612,8 +1639,8 @@ export function ChatInterface() {
 
                 <div className="border-t border-border p-4">
                     <form onSubmit={handleSubmit} className="max-w-4xl mx-auto">
-                        {/* File Preview Section - Only show in General Chat mode */}
-                        {!selectedProject && uploadedFiles.length > 0 && (
+                        {/* File Preview Section - Show in General Chat and Sandbox modes */}
+                        {(!selectedProject || activeTab === "sandbox") && uploadedFiles.length > 0 && (
                             <div className="mb-3 p-3 bg-card border border-border rounded-sm">
                                 <div className="flex items-center justify-between mb-2">
                                     <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
@@ -1721,37 +1748,35 @@ export function ChatInterface() {
                                         }
                                     }}
                                 />
-                                {activeTab !== "sandbox" && (
-                                    <button
-                                        type="button"
-                                        onClick={handleFileUpload}
+                                <button
+                                    type="button"
+                                    onClick={handleFileUpload}
+                                    className={cn(
+                                        "p-2 rounded-sm hover:bg-secondary transition-colors relative",
+                                        uploadedFiles.length > 0 &&
+                                            "bg-primary/10",
+                                    )}
+                                    aria-label="Attach file"
+                                    title={
+                                        uploadedFiles.length > 0
+                                            ? `${uploadedFiles.length} file(s) attached`
+                                            : "Attach file"
+                                    }
+                                >
+                                    <Paperclip
                                         className={cn(
-                                            "p-2 rounded-sm hover:bg-secondary transition-colors relative",
-                                            uploadedFiles.length > 0 &&
-                                                "bg-primary/10",
-                                        )}
-                                        aria-label="Attach file"
-                                        title={
+                                            "w-4 h-4",
                                             uploadedFiles.length > 0
-                                                ? `${uploadedFiles.length} file(s) attached`
-                                                : "Attach file"
-                                        }
-                                    >
-                                        <Paperclip
-                                            className={cn(
-                                                "w-4 h-4",
-                                                uploadedFiles.length > 0
-                                                    ? "text-primary"
-                                                    : "text-muted-foreground",
-                                            )}
-                                        />
-                                        {uploadedFiles.length > 0 && (
-                                            <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary text-primary-foreground text-xs font-mono rounded-full flex items-center justify-center">
-                                                {uploadedFiles.length}
-                                            </span>
+                                                ? "text-primary"
+                                                : "text-muted-foreground",
                                         )}
-                                    </button>
-                                )}
+                                    />
+                                    {uploadedFiles.length > 0 && (
+                                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary text-primary-foreground text-xs font-mono rounded-full flex items-center justify-center">
+                                            {uploadedFiles.length}
+                                        </span>
+                                    )}
+                                </button>
                                 <Button
                                     type="submit"
                                     size="sm"

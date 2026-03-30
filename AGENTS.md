@@ -346,3 +346,57 @@ Dark terminal-inspired aesthetic ("dark-product-ui"):
 ## AGNO Framework Reference
 
 For AGNO-specific APIs, search https://docs.agno.com/llms.txt for the latest details. See `log.md` for verified API signatures and common pitfalls discovered during development.
+
+## Sandbox Run
+
+The sandbox uses [Alibaba OpenSandbox](https://github.com/alibaba/OpenSandbox) — a Python server (`opensandbox-server`) that orchestrates Docker containers for isolated code execution. The Python SDK (`opensandbox`) connects to the server to create/manage sandboxes.
+
+### Prerequisites
+```bash
+# Install the server package (SDK `opensandbox` is already in pyproject.toml)
+uv add opensandbox-server
+
+# Pull the runtime images
+docker pull opensandbox/execd:v1.0.7
+docker pull sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:v1.0.1
+```
+
+### Configure
+```bash
+# Generate the Docker runtime config
+uv run opensandbox-server init-config ~/.sandbox.toml --example docker
+
+# Use --force to overwrite an existing config
+uv run opensandbox-server init-config ~/.sandbox.toml --example docker --force
+```
+
+Config lives at `~/.sandbox.toml`. Key settings:
+- `server.port = 8080` — API port
+- `runtime.type = "docker"` — uses Docker to spin up sandbox containers
+- `runtime.execd_image` — the execd sidecar image (manages commands/files inside containers)
+- `server.api_key` — uncomment to require auth
+
+### Environment variables in `.env`
+```
+SANDBOX_DOMAIN=localhost:8080
+SANDBOX_API_KEY=    # only if you enabled api_key in ~/.sandbox.toml
+```
+
+### Start the server
+```bash
+uv run opensandbox-server
+# Server binds to 127.0.0.1:8080
+```
+
+### Verify
+```bash
+curl http://localhost:8080/health
+# {"status":"healthy"}
+```
+
+### How it works
+1. `opensandbox-server` listens on port 8080 and talks to the Docker daemon
+2. The backend (`agent-api.py`) uses the `opensandbox` SDK to call `Sandbox.create(image, connection_config=config)`
+3. The server pulls the code-interpreter image, starts a container with the execd sidecar
+4. The SDK sends commands (`sandbox.commands.run()`) and file ops (`sandbox.files.write_file()`) to the container via the server
+5. The sandbox persists across messages in a session — variables, imports, and files carry over

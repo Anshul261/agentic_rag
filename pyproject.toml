@@ -10,6 +10,7 @@ dependencies = [
     "huggingface-hub>=1.8.0",
     "langchain-openai>=1.1.12",
     "opensandbox>=0.1.6",
+    "opensandbox-server>=0.1.9",
     "psycopg>=3.3.3",
     "psycopg2-binary>=2.9.11",
     "pydantic>=2.12.5",

@@ -227,7 +227,18 @@ _sandbox_instance: Optional[Sandbox] = None
 
 
 async def get_sandbox() -> Sandbox:
-    global _sandbox_instance
+    global _sandbox_instance, sandbox_agent
+    if _sandbox_instance is not None:
+        try:
+            await _sandbox_instance.is_running()
+        except Exception:
+            print("[SANDBOX] Existing sandbox is dead, recreating...")
+            try:
+                await _sandbox_instance.close()
+            except Exception:
+                pass
+            _sandbox_instance = None
+            sandbox_agent = None
     if _sandbox_instance is None:
         config = ConnectionConfig(
             domain=SANDBOX_DOMAIN,
@@ -235,7 +246,9 @@ async def get_sandbox() -> Sandbox:
             request_timeout=timedelta(seconds=120),
         )
         _sandbox_instance = await Sandbox.create(
-            SANDBOX_IMAGE, connection_config=config
+            SANDBOX_IMAGE,
+            connection_config=config,
+            timeout=timedelta(hours=24),
         )
         print(f"[SANDBOX] Created sandbox: {_sandbox_instance.id}")
     return _sandbox_instance
@@ -258,6 +271,8 @@ class SandboxTools(Toolkit):
             self.run_script,
             self.install_packages,
             self.download_file,
+            self.read_file,
+            self.list_files,
         ]
         super().__init__(name="sandbox_tools", tools=tools, **kwargs)
 
@@ -302,6 +317,20 @@ class SandboxTools(Toolkit):
         data = await self.sandbox.files.read_bytes(sandbox_path)
         local_path.write_bytes(data)
         return f"Saved to {local_path} ({len(data):,} bytes)"
+
+    async def read_file(self, sandbox_path: str) -> str:
+        """Read the contents of a file in the sandbox."""
+        try:
+            data = await self.sandbox.files.read_bytes(sandbox_path)
+            return data.decode("utf-8", errors="replace")
+        except Exception as e:
+            return f"Error reading {sandbox_path}: {e}"
+
+    async def list_files(self, directory: str = "/workspace") -> str:
+        """List files in a sandbox directory."""
+        execution = await self.sandbox.commands.run(f"ls -la {directory}")
+        stdout = "\n".join(msg.text for msg in execution.logs.stdout).strip()
+        return stdout or "(empty directory)"
 
 
 # ============================================================================
@@ -1193,6 +1222,7 @@ async def query_sandbox(
     message: str = Form(...),
     session_id: str = Form(None),
     stream: str = Form("true"),
+    files: list[UploadFile] = FastAPIFile(None),
 ):
     """Query the sandbox agent with Python code execution capabilities."""
     try:
@@ -1202,6 +1232,23 @@ async def query_sandbox(
             status_code=503,
             content={"error": f"Failed to initialize sandbox: {str(e)}"},
         )
+
+    # Upload files into the sandbox container
+    uploaded_names = []
+    if files:
+        sandbox = await get_sandbox()
+        for f in files:
+            if f.filename:
+                content = await f.read()
+                sandbox_path = f"/workspace/{f.filename}"
+                await sandbox.files.write_file(sandbox_path, content)
+                uploaded_names.append(f.filename)
+                print(f"[SANDBOX] Uploaded {f.filename} ({len(content):,} bytes) to {sandbox_path}")
+
+    # Prepend file context to the message so the agent knows about them
+    if uploaded_names:
+        file_list = ", ".join(uploaded_names)
+        message = f"[Files uploaded to /workspace/: {file_list}]\n\n{message}"
 
     if stream.lower() == "true":
 

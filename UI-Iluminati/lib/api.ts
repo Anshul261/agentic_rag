@@ -427,12 +427,18 @@ export async function queryProject(
 export async function querySandbox(
     message: string,
     sessionId?: string,
+    files?: File[],
 ): Promise<Response> {
     const formData = new FormData();
     formData.append("message", message);
     formData.append("stream", "true");
     if (sessionId) {
         formData.append("session_id", sessionId);
+    }
+    if (files && files.length > 0) {
+        for (const file of files) {
+            formData.append("files", file);
+        }
     }
 
     return fetch(`${BFF_BASE}/sandbox/query`, {
