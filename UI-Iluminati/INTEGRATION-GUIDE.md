@@ -1,199 +1,193 @@
-# UI-Illuminati + Document Agent Integration Guide
-
-This guide explains how the UI-Illuminati frontend is integrated with the simple document agent API.
+# UI-Illuminati Integration Guide
 
 ## Overview
 
-The UI-Illuminati chat interface is now connected to your document agent API. When you're in **General Chat mode** (not in a project), all questions are automatically sent to the document agent running on `http://localhost:7777`.
+The UI-Illuminati frontend connects to the `agent-api.py` backend running on `http://localhost:7777`. All API calls go through a Next.js BFF (Backend-for-Frontend) proxy at `/api/agentOS/*` which attaches auth credentials automatically.
 
-## Key Features
+## Three Operating Modes
 
-### General Chat Mode
-- **Direct API Integration**: All messages in general chat mode are sent to the document agent
-- **File Upload Support**: Upload documents (PDF, TXT, etc.) with your questions
-- **Session Management**: Each chat maintains its own session ID for conversation history
-- **Error Handling**: Clear error messages if the API is not running
+### 1. General Chat (Team Mode)
 
-### Project Mode
-- **Separate from Agent**: Project mode is NOT connected to the agent API
-- **Mock Responses**: Currently uses placeholder responses
-- **File Management**: Projects have their own file management system
+User talks to a team of agents (`doc-agent` for document reading, `duckduckgo-agent` for web search).
 
-## How It Works
-
-### 1. General Chat Flow
 ```
-User asks question in General Chat
-    ↓
-Frontend sends to: POST http://localhost:7777/agents/doc-agent/runs
-    ↓
-Document Agent processes (with LLM knowledge or uploaded files)
-    ↓
-Response displayed in chat interface
+User sends message
+  → Frontend POST /api/agentOS/teams/{teamId}/runs (FormData + optional files)
+  → BFF proxy forwards to backend with JWT
+  → Backend streams SSE events (RunContent, ToolCallStarted, ToolCallCompleted, RunStarted)
+  → Frontend renders streaming markdown + agent trace
 ```
 
-### 2. File Upload in General Chat
+**File uploads**: Attach files via the paperclip icon. Files are sent as `multipart/form-data` alongside the message. The agent extracts text and answers based on content.
+
+### 2. Project Mode (RAG)
+
+Upload files to a project, then ask questions against the entire knowledge base.
+
 ```
-User attaches file(s) in General Chat
-    ↓
-Files stored temporarily in component state
-    ↓
-On message send: Files sent as multipart/form-data
-    ↓
-Document Agent extracts text and answers based on content
-    ↓
-Files cleared after successful send
+Upload files
+  → POST /api/agentOS/projects/{projectId}/files (multipart)
+  → Backend extracts text (PDF via PyPDF2, or UTF-8)
+  → Chunks at 2000 chars with 200 char overlap
+  → Embeds via HuggingFace BAAI/bge-small-en-v1.5 (384 dims)
+  → Stores in PgVector table: ai.project_{id}
+
+Query project
+  → POST /api/agentOS/projects/{projectId}/query (FormData: message + session_id)
+  → Backend creates Agent with Knowledge(PgVector), search_knowledge=True, max_results=30
+  → Hybrid search (vector + keyword) retrieves relevant chunks
+  → SSE streamed response
 ```
 
-## Setup Instructions
+### 3. Sandbox Mode
 
-### 1. Start the Document Agent API
+Execute Python code via OpenSandbox.
 
-First, make sure your document agent is running:
+```
+User sends code
+  → POST /api/agentOS/sandbox/query
+  → Backend executes in sandboxed Python environment
+  → SSE streamed response with output
+```
+
+## Setup
+
+### Prerequisites
+
+- **PostgreSQL with pgvector**: Docker container `agno_pgvector` on port 5533
+- **Python 3.11+** with `uv` package manager
+- **Node.js 18+** with npm
+- **Azure OpenAI** credentials in `.env`
+- **HuggingFace API key** in `.env` as `HUGGINGFACE_API_KEY`
+
+### Start Backend
 
 ```bash
-cd /home/anshul/Projects/AI-Search-MCP/Agents/Agentic-Rag
-
-# Make sure .env is configured with Azure OpenAI credentials
-python simple-doc-agent.py
+cd /home/anshul/projects/agentic_rag
+uv run agent-api.py
+# Runs on http://0.0.0.0:7777
 ```
 
-The API should start on: `http://localhost:7777`
-
-### 2. Start the UI-Illuminati Frontend
-
-In a separate terminal:
+### Start Frontend
 
 ```bash
-cd /home/anshul/Projects/AI-Search-MCP/Agents/Agentic-Rag/UI-Iluminati
-
-# Install dependencies (if not already done)
-npm install
-
-# Start the development server
+cd /home/anshul/projects/agentic_rag/UI-Iluminati
 npm run dev
+# Runs on http://localhost:3000
 ```
 
-The UI should start on: `http://localhost:3000`
+## API Endpoints
 
-### 3. Test the Integration
-
-1. **Open the UI**: Go to `http://localhost:3000`
-2. **Ensure you're in General Chat mode**:
-   - If you see a project selected, click the "New Chat" button
-   - You should see "AI Assistant" in the header
-3. **Ask a question**: Type any question and press Enter
-4. **Upload a document (optional)**:
-   - Click the paperclip icon
-   - Select a file (PDF, TXT, etc.)
-   - Ask a question about the file
-   - The agent will process the file and answer
-
-## File Structure
-
-```
-UI-Iluminati/
-├── components/
-│   └── chat-interface.tsx        # Main chat component (UPDATED)
-├── lib/
-│   └── api.ts                     # API integration (NEW)
-└── INTEGRATION-GUIDE.md          # This file (NEW)
-
-Agentic-Rag/
-└── simple-doc-agent.py           # Document agent API
-```
-
-## Code Changes
-
-### New Files
-- `lib/api.ts`: API client for communicating with the document agent
-  - `sendMessageToAgent()`: Sends messages and files to the agent
-  - `checkAPIHealth()`: Checks if API is running
-  - `getAPIInfo()`: Gets API information
-
-### Modified Files
-- `components/chat-interface.tsx`:
-  - Import `sendMessageToAgent` from `lib/api.ts`
-  - Added `sessionId` state for conversation tracking
-  - Added `uploadedFiles` state for general chat file uploads
-  - **Updated `handleSubmit()`**: Calls real API in general chat mode
-  - **Updated file upload handler**: Stores files for API upload
-
-## Configuration
-
-### Environment Variables (Frontend)
-
-Create `.env.local` in the UI-Illuminati directory:
-
-```bash
-NEXT_PUBLIC_API_URL=http://localhost:7777
-```
-
-If not set, defaults to `http://localhost:7777`.
-
-### Environment Variables (Backend)
-
-The document agent requires these in `.env`:
-
-```bash
-AZURE_OPENAI_API_KEY=your_key
-AZURE_OPENAI_ENDPOINT=your_endpoint
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4.1-mini
-OPENAI_API_VERSION=2024-02-15-preview
-```
-
-## Troubleshooting
-
-### "Error: Failed to get response from agent"
-- **Check**: Is the document agent running on port 7777?
-- **Solution**: Run `python simple-doc-agent.py` in the Agentic-Rag directory
-
-### "API Error: 500"
-- **Check**: Are Azure OpenAI credentials configured correctly?
-- **Solution**: Verify `.env` file in Agentic-Rag directory has correct values
-
-### Files not uploading
-- **Check**: Are you in General Chat mode (not Project mode)?
-- **Solution**: Click "New Chat" button to exit project mode
-
-### CORS errors in browser console
-- **Check**: Is the API URL correct?
-- **Solution**: Make sure NEXT_PUBLIC_API_URL matches where the agent is running
-
-## API Endpoints Used
+### Auth (Next.js API routes)
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/agents/doc-agent/runs` | POST | Send messages and files to agent |
-| `/health` | GET | Check if API is running |
-| `/info` | GET | Get API information |
+| `/api/auth/login` | POST | Login, sets session cookie |
+| `/api/auth/signup` | POST | Register new user |
+| `/api/auth/logout` | POST | Clear session |
+| `/api/auth/session` | GET | Check session status |
 
-## Testing Checklist
+### Teams & Chat (proxied to backend)
 
-- [ ] Document agent API starts successfully
-- [ ] Frontend starts and loads
-- [ ] Can send messages in general chat mode
-- [ ] Receive responses from the agent
-- [ ] Can upload files in general chat
-- [ ] Agent processes uploaded files correctly
-- [ ] Error messages display when API is down
-- [ ] Project mode still works (with mock responses)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/agentOS/teams` | GET | List available teams |
+| `/api/agentOS/teams/{id}/runs` | POST | Send message to team (SSE) |
+| `/api/agentOS/sessions` | GET | List chat sessions |
+| `/api/agentOS/sessions/{id}/runs` | GET | Get session run history |
 
-## Next Steps
+### Projects (proxied to backend)
 
-### Optional Enhancements
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/agentOS/projects` | GET/POST | List or create projects |
+| `/api/agentOS/projects/{id}` | GET/DELETE | Get details or delete project |
+| `/api/agentOS/projects/{id}/files` | POST | Upload files to project |
+| `/api/agentOS/projects/{id}/files/{fid}` | DELETE | Remove file from project |
+| `/api/agentOS/projects/{id}/query` | POST | Query project knowledge base (SSE) |
+| `/api/agentOS/projects/{id}/sessions` | GET | List project chat sessions |
 
-1. **Add streaming responses**: Update API call to use `stream=true`
-2. **Show file badges**: Display uploaded files before sending
-3. **Connect project mode**: Link projects to specific agent sessions
-4. **Add retry logic**: Automatically retry failed API calls
-5. **Session persistence**: Save and load previous conversations
+### Sandbox (proxied to backend)
 
-## Support
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/agentOS/sandbox/query` | POST | Execute Python code (SSE) |
 
-If you encounter issues:
+## SSE Event Format
 
-1. Check both terminal outputs (frontend and backend)
-2. Open browser DevTools → Network tab to see API calls
-3. Check browser Console for JavaScript errors
-4. Verify all environment variables are set correctly
+All streaming endpoints return Server-Sent Events:
+
+```
+event: RunStarted
+data: {"agent": {"name": "Team", "id": "..."}}
+
+event: ToolCallStarted
+data: {"tool": {"tool_name": "search_knowledge"}, "agent": {"name": "doc-agent"}}
+
+event: RunContent
+data: {"content": "partial markdown text..."}
+
+event: ToolCallCompleted
+data: {"tool": {"tool_name": "search_knowledge", "metrics": {"duration": 1.23}}}
+
+event: RunError
+data: {"error": "error message"}
+```
+
+## Frontend File Structure
+
+```
+UI-Iluminati/
+├── app/
+│   ├── globals.css              # Design tokens (dark theme, orange accent)
+│   ├── layout.tsx               # Root layout (JetBrains Mono + Inter fonts)
+│   ├── page.tsx                 # Home → ChatInterface
+│   ├── (auth)/                  # Public auth routes
+│   │   ├── login/page.tsx
+│   │   └── signup/page.tsx
+│   └── api/agentOS/             # BFF proxy routes to backend
+├── components/
+│   ├── chat-interface.tsx       # Main UI (sidebar, chat, projects, sandbox)
+│   ├── agent-trace.tsx          # Agent activity visualization
+│   ├── auth/                    # Login/signup forms
+│   ├── providers/               # AuthProvider
+│   └── ui/                      # 50+ Shadcn/Radix components
+├── lib/
+│   ├── api.ts                   # API client functions
+│   ├── utils.ts                 # cn() utility
+│   ├── auth/                    # Session management
+│   └── store/                   # Zustand stores (auth, chat)
+├── middleware.ts                # Route protection
+└── package.json
+```
+
+## Design System
+
+Terminal-inspired dark theme ("dark-product-ui"):
+
+- **Backgrounds**: `#0A0A0A` (primary), `#111111` (sidebar), `#0F0F0F` (cards)
+- **Accent**: `#E07A3A` (orange) — used for dots, icons, active states
+- **Text**: `#EDEDED` (primary), `#999999` (secondary), `#666666` (muted)
+- **Borders**: `#2A2A2A` (standard), `#1A1A1A` (subtle)
+- **Fonts**: JetBrains Mono (body), Inter (headings)
+- **Texture**: Diagonal pinstripe at 2% white opacity on content areas
+
+## Troubleshooting
+
+### Backend won't start
+- Check port 7777 is free: `ss -tlnp | grep 7777`
+- Kill existing: `kill $(lsof -ti:7777)`
+
+### File upload fails in project mode
+- Verify PostgreSQL is running: `ss -tlnp | grep 5533`
+- Check `PGVECTOR_DB_URL` in `.env` uses port **5533**
+- Check `HUGGINGFACE_API_KEY` is valid (test: `curl -H "Authorization: Bearer $KEY" https://huggingface.co/api/whoami`)
+
+### Project queries return partial results
+- `Knowledge(max_results=30)` in `agent-api.py` controls how many chunks are retrieved
+- Check the vector table: `docker exec agno_pgvector psql -U ai -d ai -c "SELECT name, COUNT(*) FROM ai.project_{id} GROUP BY name;"`
+
+### Auth issues
+- Session cookie: `__iluminati_session`
+- Secret key: `SECRET_KEY` in `.env`
+- Middleware protects all routes except `/login`, `/signup`, `/api/auth`
