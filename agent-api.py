@@ -43,11 +43,11 @@ import jwt as pyjwt
 import PyPDF2
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
-from agno.knowledge.embedder.ollama import OllamaEmbedder
+from agno.knowledge.chunking.document import DocumentChunking
 from agno.knowledge.embedder.huggingface import HuggingfaceCustomEmbedder
+from agno.knowledge.embedder.ollama import OllamaEmbedder
 from agno.knowledge.knowledge import Knowledge
 from agno.knowledge.reader.pdf_reader import PDFReader
-from agno.knowledge.chunking.document import DocumentChunking
 from agno.media import File
 from agno.models.azure import AzureOpenAI
 from agno.os import AgentOS
@@ -964,7 +964,9 @@ async def upload_project_files(
             pdf_chunking = DocumentChunking(chunk_size=2000, overlap=200)
             if is_pdf:
                 await knowledge.add_content_async(
-                    path=tmp_path, name=filename, reader=PDFReader(chunking_strategy=pdf_chunking)
+                    path=tmp_path,
+                    name=filename,
+                    reader=PDFReader(chunking_strategy=pdf_chunking),
                 )
             else:
                 await knowledge.add_content_async(path=tmp_path, name=filename)
@@ -1243,7 +1245,9 @@ async def query_sandbox(
                 sandbox_path = f"/workspace/{f.filename}"
                 await sandbox.files.write_file(sandbox_path, content)
                 uploaded_names.append(f.filename)
-                print(f"[SANDBOX] Uploaded {f.filename} ({len(content):,} bytes) to {sandbox_path}")
+                print(
+                    f"[SANDBOX] Uploaded {f.filename} ({len(content):,} bytes) to {sandbox_path}"
+                )
 
     # Prepend file context to the message so the agent knows about them
     if uploaded_names:
