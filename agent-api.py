@@ -57,9 +57,10 @@ from agno.tools import Toolkit
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.vectordb.pgvector import PgVector, SearchType
 from dotenv import load_dotenv
-from fastapi import APIRouter, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from fastapi import File as FastAPIFile
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from opensandbox import Sandbox
 from opensandbox.config import ConnectionConfig
 from pydantic import BaseModel
@@ -467,6 +468,48 @@ def create_jwt(user_id: str, email: str) -> str:
     return pyjwt.encode(payload, AUTH_SECRET, algorithm=JWT_ALGORITHM)
 
 
+http_bearer = HTTPBearer(auto_error=False)
+
+
+def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer),
+) -> str:
+    """
+    Extract user_id from JWT token in Authorization header.
+    Raises 401 if missing or invalid.
+    """
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    try:
+        payload = pyjwt.decode(
+            credentials.credentials,
+            AUTH_SECRET,
+            algorithms=[JWT_ALGORITHM],
+        )
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token: missing sub")
+        return user_id
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except pyjwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+
+def verify_project_ownership(project_id: str, user_id: str) -> bool:
+    """Verify that a project belongs to the given user. Returns True if owned, False otherwise."""
+    conn = sqlite3.connect(PROJECTS_DB)
+    conn.row_factory = sqlite3.Row
+    project = conn.execute(
+        "SELECT user_id FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    conn.close()
+    if not project:
+        return False
+    return project["user_id"] == user_id
+
+
 def get_project_knowledge(project_id: str) -> Knowledge:
     """Create an AGNO Knowledge object backed by PgVector for a specific project."""
     return Knowledge(
@@ -792,27 +835,26 @@ async def login(req: LoginRequest):
 
 
 class CreateProjectRequest(BaseModel):
-    user_id: str
     name: str
     description: str = ""
 
 
 @custom_router.post("/projects")
-async def create_project(req: CreateProjectRequest):
-    """Create a new project."""
+async def create_project(req: CreateProjectRequest, user_id: str = Depends(get_current_user_id)):
+    """Create a new project for the authenticated user."""
     project_id = str(uuid.uuid4())
     conn = sqlite3.connect(PROJECTS_DB)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(
         "INSERT INTO projects (id, user_id, name, description) VALUES (?, ?, ?, ?)",
-        (project_id, req.user_id, req.name, req.description),
+        (project_id, user_id, req.name, req.description),
     )
     conn.commit()
     conn.close()
     return JSONResponse(
         content={
             "id": project_id,
-            "user_id": req.user_id,
+            "user_id": user_id,
             "name": req.name,
             "description": req.description,
         }
@@ -820,8 +862,8 @@ async def create_project(req: CreateProjectRequest):
 
 
 @custom_router.get("/projects")
-async def list_projects(user_id: str = Query(...)):
-    """List all projects for a user."""
+async def list_projects(user_id: str = Depends(get_current_user_id)):
+    """List all projects for the authenticated user."""
     conn = sqlite3.connect(PROJECTS_DB)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
@@ -850,8 +892,11 @@ async def list_projects(user_id: str = Query(...)):
 
 
 @custom_router.get("/projects/{project_id}")
-async def get_project(project_id: str):
-    """Get project details with file list."""
+async def get_project(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """Get project details with file list. Must be project owner."""
+    if not verify_project_ownership(project_id, user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied: not the project owner"})
+    
     conn = sqlite3.connect(PROJECTS_DB)
     conn.row_factory = sqlite3.Row
     project = conn.execute(
@@ -889,8 +934,11 @@ async def get_project(project_id: str):
 
 
 @custom_router.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
-    """Delete a project and its PgVector table."""
+async def delete_project(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """Delete a project and its PgVector table. Must be project owner."""
+    if not verify_project_ownership(project_id, user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied: not the project owner"})
+    
     conn = sqlite3.connect(PROJECTS_DB)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
@@ -922,9 +970,12 @@ async def delete_project(project_id: str):
 async def upload_project_files(
     project_id: str,
     files: list[UploadFile] = FastAPIFile(...),
+    user_id: str = Depends(get_current_user_id),
 ):
-    """Upload files to a project and ingest into the knowledge base."""
-    # Verify project exists
+    """Upload files to a project and ingest into the knowledge base. Must be project owner."""
+    if not verify_project_ownership(project_id, user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied: not the project owner"})
+    
     conn = sqlite3.connect(PROJECTS_DB)
     conn.row_factory = sqlite3.Row
     project = conn.execute(
@@ -1005,8 +1056,15 @@ async def upload_project_files(
 
 
 @custom_router.delete("/projects/{project_id}/files/{file_id}")
-async def delete_project_file(project_id: str, file_id: str):
-    """Remove a file from a project."""
+async def delete_project_file(
+    project_id: str,
+    file_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Remove a file from a project. Must be project owner."""
+    if not verify_project_ownership(project_id, user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied: not the project owner"})
+    
     conn = sqlite3.connect(PROJECTS_DB)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(
@@ -1024,8 +1082,11 @@ async def delete_project_file(project_id: str, file_id: str):
 
 
 @custom_router.get("/projects/{project_id}/sessions")
-async def list_project_sessions(project_id: str):
-    """List all sessions for a project."""
+async def list_project_sessions(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """List all sessions for a project. Must be project owner."""
+    if not verify_project_ownership(project_id, user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied: not the project owner"})
+    
     conn = sqlite3.connect(PROJECTS_DB)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
@@ -1048,8 +1109,15 @@ async def list_project_sessions(project_id: str):
 
 
 @custom_router.get("/projects/{project_id}/sessions/{session_id}/runs")
-async def get_project_session_runs(project_id: str, session_id: str):
-    """Get all runs (messages) for a project session."""
+async def get_project_session_runs(
+    project_id: str,
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Get all runs (messages) for a project session. Must be project owner."""
+    if not verify_project_ownership(project_id, user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied: not the project owner"})
+    
     try:
         conn = sqlite3.connect(PROJECTS_DB)
         conn.row_factory = sqlite3.Row
@@ -1111,8 +1179,16 @@ async def query_project(
     message: str = Form(...),
     session_id: str = Form(None),
     stream: str = Form("true"),
+    user_id: str = Depends(get_current_user_id),
 ):
-    """Query a project's knowledge base using agentic RAG."""
+    """Query a project's knowledge base using agentic RAG. Must be project owner."""
+    if not verify_project_ownership(project_id, user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied: not the project owner"})
+    
+    # Generate session_id server-side if not provided
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    
     # Verify project exists
     conn = sqlite3.connect(PROJECTS_DB)
     conn.row_factory = sqlite3.Row
@@ -1225,8 +1301,13 @@ async def query_sandbox(
     session_id: str = Form(None),
     stream: str = Form("true"),
     files: list[UploadFile] = FastAPIFile(None),
+    user_id: str = Depends(get_current_user_id),
 ):
     """Query the sandbox agent with Python code execution capabilities."""
+    # Generate session_id server-side if not provided
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    
     try:
         sandbox_agent_instance = await get_sandbox_agent()
     except Exception as e:
@@ -1300,7 +1381,7 @@ async def query_sandbox(
 
 
 @custom_router.post("/sandbox/close")
-async def close_sandbox_endpoint():
+async def close_sandbox_endpoint(user_id: str = Depends(get_current_user_id)):
     """Close the sandbox instance."""
     await close_sandbox()
     return JSONResponse(content={"status": "sandbox closed"})

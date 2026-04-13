@@ -203,3 +203,274 @@ await knowledge.add_content_async(
 | `Agents/Agentic-Rag/agent-api.py` | Modified — added project DB, endpoints, Knowledge/PgVector integration |
 | `Agents/Agentic-Rag/UI-Iluminati/lib/api.ts` | Modified — added project API functions + getUserId |
 | `Agents/Agentic-Rag/UI-Iluminati/components/chat-interface.tsx` | Modified — connected projects to backend, SSE streaming for project queries |
+
+---
+
+## 31 March 2026 — AgentOS Alignment & PgVector User Separation Refactor
+
+### Problem Statement
+
+After auditing `agent-api.py` against AgentOS best practices, we found the codebase was **working around AgentOS instead of with it**:
+
+1. **Unregistered agents**: Only `doc_agent` and `duckduckgo_agent` are registered. The project agent (created per-request) and sandbox agent (lazy-loaded) are invisible to AgentOS — no auto-routes, no session management, no RBAC, no tracing.
+2. **Duplicate code**: Custom SSE streaming, health endpoints, and session management reimplemented despite AgentOS providing all of these out-of-the-box.
+3. **Per-project PgVector tables**: Current design creates `project_{uuid}` table per project. With many users/projects, this creates table sprawl and prevents cross-project search for a user.
+4. **`include_router` bolted on**: Custom endpoints added after `get_app()` instead of using the `base_app` pattern with proper route conflict resolution.
+
+### Research Sources
+
+| Topic | Source |
+|---|---|
+| AgentOS auto-generated routes | Source: `agno/os/routers/agents/router.py`, `teams/router.py`, `session/session.py`, `knowledge/knowledge.py` |
+| AgentOS `base_app` pattern | Source: `agno/os/app.py` — `base_app` param + `on_route_conflict` |
+| AgentOS JWT middleware | Source: `agno/os/middleware/jwt.py` — `excluded_route_paths`, HS256 support |
+| PgVector metadata filtering | Source: `agno/vectordb/pgvector/pgvector.py` — `meta_data` JSONB column, `@>` containment queries |
+| Knowledge `isolate_vector_search` | Source: `agno/knowledge/knowledge.py` — `linked_to` metadata + auto-filter |
+| Knowledge `knowledge_filters` | Source: `agno/agent/agent.py` — per-agent or per-run filter dicts |
+| AgentOS API reference | https://docs.agno.com/reference-api/schema/agents/create-agent-run |
+| AgentOS security | https://docs.agno.com/agent-os/security |
+| Knowledge filter expressions | `agno/vectordb/pgvector/pgvector.py` — `EQ`, `IN`, `GT`, `AND`, `OR` DSL |
+| AgentOS run endpoint params | `POST /agents/{id}/runs`: message, stream, session_id, user_id, files, version, background, dependencies, metadata |
+| AgentOS session management | `GET/POST/DELETE /sessions` — auto user_id scoping, pagination, CRUD |
+| AgentOS knowledge routes | `POST /knowledge/content`, `POST /knowledge/search`, `GET /knowledge/content/{id}/status` |
+| AGNO docs index | https://docs.agno.com/llms.txt |
+
+### What AgentOS Auto-Generates (that we were duplicating)
+
+| Our Custom Endpoint | AgentOS Built-in |
+|---|---|
+| `GET /health` | Auto-generated `GET /health` |
+| `GET /info` | Auto-generated `GET /config` (full OS config) |
+| `GET /projects/{id}/sessions` | `GET /sessions?type=agent&component_id={agent_id}&user_id={user_id}` |
+| `GET /projects/{id}/sessions/{sid}/runs` | `GET /sessions/{session_id}/runs` |
+| Custom SSE streaming (project + sandbox) | Built-in SSE on `POST /agents/{id}/runs` with richer event types |
+
+### What Remains Custom (AgentOS has no equivalent)
+
+| Endpoint | Reason |
+|---|---|
+| `POST /v1/auth/signup`, `/login` | AgentOS has no user registration |
+| `POST /projects` (CRUD) | AgentOS has no "project" concept — domain-specific |
+| `POST /projects/{id}/files` | File upload + per-project knowledge ingestion with metadata tagging |
+| `POST /projects/{id}/query` | AgentOS run routes don't expose `knowledge_filters` param — we need per-request project scoping |
+| `POST /sandbox/query` | Lazy sandbox init + file upload to sandbox container |
+| `POST /sandbox/close` | Sandbox lifecycle management |
+
+### PgVector User Separation Architecture
+
+**Current (per-project tables):**
+```
+ai.project_abc123  ← all chunks for project abc123
+ai.project_def456  ← all chunks for project def456
+ai.project_ghi789  ← all chunks for project ghi789
+... (N tables for N projects across all users)
+```
+
+**New (per-user tables with metadata filtering):**
+```
+ai.user_<user_id>  ← single table per user
+  └── meta_data JSONB contains: {"project_id": "abc123", "filename": "doc.pdf"}
+  └── meta_data JSONB contains: {"project_id": "def456", "filename": "report.pdf"}
+  └── GIN index on meta_data for fast JSONB @> queries
+```
+
+**How filtering works:**
+- AGNO's `PgVector.search()` accepts `filters={"project_id": "abc123"}`
+- Translates to SQL: `WHERE meta_data @> '{"project_id": "abc123"}'::jsonb`
+- Agent uses `knowledge_filters={"project_id": project_id}` on each run
+- `Knowledge(isolate_vector_search=True)` adds `linked_to` auto-filter for extra safety
+
+**Benefits:**
+- Hard user isolation (separate tables per user) — good for compliance
+- Soft project isolation within a user's table (metadata filters)
+- Fewer tables: N_users vs N_projects (typically 10-100x fewer)
+- Enables cross-project search for a user if needed later
+- AGNO-native: uses `knowledge_filters` + `meta_data` JSONB — no custom SQL
+- Clean deletion: drop user table on account delete, `remove_vectors_by_metadata` on project delete
+
+**GIN index needed for performance:**
+```sql
+CREATE INDEX idx_user_{id}_meta_gin ON ai.user_{id} USING GIN (meta_data);
+```
+
+### Refactor Plan
+
+#### Phase 1: AgentOS Alignment (agent-api.py)
+
+1. **Switch to `base_app` pattern**: Create custom `FastAPI` app first, pass to `AgentOS(base_app=custom_app, on_route_conflict="preserve_base_app")`
+2. **Remove duplicate endpoints**: Delete custom `/health` and `/info` (use AgentOS built-in)
+3. **Remove custom project session endpoints**: Use AgentOS built-in `GET /sessions` with `component_id` filter
+4. **Cache project agents**: Dict of `project_id -> Agent` instead of creating per-request
+5. **Add project scopes to JWT**: Add `projects:read`, `projects:write`, `projects:delete`, `knowledge:read`, `knowledge:write` to JWT scopes
+
+#### Phase 2: PgVector Migration
+
+1. **Change `get_project_knowledge()`** → `get_user_knowledge(user_id)`: Returns Knowledge with `PgVector(table_name=f"user_{user_id}")`
+2. **Add metadata on ingest**: Pass `metadata={"project_id": project_id, "filename": filename}` to `knowledge.add_content_async()`
+3. **Filter on query**: Use `knowledge_filters={"project_id": project_id}` in project agent
+4. **Add GIN index**: On table creation, add `CREATE INDEX ... USING GIN (meta_data)` for fast metadata queries
+5. **Update delete logic**: Project delete → `knowledge.remove_vectors_by_metadata({"project_id": project_id})` instead of `DROP TABLE`
+6. **Migration script**: Move existing per-project tables to per-user tables (optional, can start fresh)
+
+#### Phase 3: Frontend BFF Updates
+
+1. **Update proxy routes** to match new backend endpoints where changed
+2. **Use AgentOS session endpoints** via BFF proxy instead of custom project session endpoints
+3. **Update `api.ts`** to call correct paths
+
+### AGNO PgVector Internals Reference (from source code audit)
+
+**Table schema (v1):**
+| Column | Type | Notes |
+|---|---|---|
+| `id` | String (PK) | MD5 of `{doc_id}_{content_hash}` |
+| `name` | String | Document/chunk name |
+| `meta_data` | JSONB | **All metadata + filters merged here** |
+| `filters` | JSONB | Raw filter dict (bookkeeping only) |
+| `content` | TEXT | Chunk text |
+| `embedding` | Vector(dims) | Vector embedding |
+| `usage` | JSONB | Token usage stats |
+| `content_hash` | String | Hash of source content |
+| `content_id` | String | Parent Content object ID |
+| `created_at` | DateTime | Auto-set |
+| `updated_at` | DateTime | Auto-set on update |
+
+**How metadata merges on insert (`_get_document_record()`):**
+```python
+meta_data = doc.meta_data or {}
+if filters:
+    meta_data.update(filters)  # user metadata merged into meta_data JSONB
+```
+
+**How search filters work (`_search_vector()`, `_search_keyword()`, `_search_hybrid()`):**
+```python
+# Dict filters → JSONB containment:
+stmt = stmt.where(table.c.meta_data.contains(filters))
+# SQL: WHERE meta_data @> '{"project_id": "xxx"}'::jsonb
+
+# FilterExpr DSL:
+# EQ("project_id", "xxx") → meta_data->>'project_id' = 'xxx'
+# IN("status", ["a","b"]) → meta_data->>'status' IN ('a','b')
+```
+
+**Knowledge `isolate_vector_search` behavior:**
+- Always sets `meta_data["linked_to"] = self.name` on every chunk at insert time
+- When `isolate_vector_search=True`, auto-injects `{"linked_to": self.name}` filter on every search
+- Useful for multiple Knowledge instances sharing one PgVector table
+
+---
+
+## Security Updates (April 2026)
+
+### Problem Identified
+
+The original implementation had a **critical security vulnerability**: project endpoints relied on client-provided `user_id` from query parameters instead of extracting it from the JWT token. This allowed users to:
+
+1. List other users' projects by guessing IDs
+2. Delete other users' projects
+3. Upload files to other users' projects
+4. Query other users' project knowledge bases
+
+### Solution Implemented
+
+**1. JWT user_id extraction:**
+- Added `get_current_user_id()` dependency that extracts `sub` claim from Authorization header
+- Uses `HTTPBearer` security scheme
+- Raises 401 if missing/invalid/expired
+
+**2. Ownership verification:**
+- Added `verify_project_ownership(project_id, user_id)` function
+- Queries `projects` table to check `project.user_id == JWT user_id`
+- Returns True only if match
+
+**3. Server-side session_id:**
+- Generate `session_id` server-side if not provided
+- Prevents session hijacking
+
+### Updated Endpoints
+
+All project and sandbox endpoints now require JWT and ownership verification:
+
+| Endpoint | Auth | Ownership Check |
+|----------|------|-----------------|
+| `POST /projects` | JWT | Uses JWT user_id |
+| `GET /projects` | JWT | Own projects only |
+| `GET /projects/{id}` | JWT | Must own |
+| `DELETE /projects/{id}` | JWT | Must own |
+| `POST /projects/{id}/files` | JWT | Must own |
+| `DELETE /projects/{id}/files/{file_id}` | JWT | Must own |
+| `GET /projects/{id}/sessions` | JWT | Must own |
+| `GET /projects/{id}/sessions/{session_id}/runs` | JWT | Must own |
+| `POST /projects/{id}/query` | JWT | Must own |
+| `POST /sandbox/query` | JWT | Valid token |
+| `POST /sandbox/close` | JWT | Valid token |
+
+### Test Results
+
+```
+=== Testing Ownership Enforcement ===
+
+1. User A → GET proj-b-1 (User B project)
+   Status: 403 ✓ BLOCKED!
+
+2. User B → GET proj-a-1 (User A project)
+   Status: 403 ✓ BLOCKED!
+
+3. User A → DELETE proj-b-1 (User B project)
+   Status: 403 ✓ BLOCKED!
+
+5. User A → GET proj-a-1 (own project)
+   Status: 200 ✓ ALLOWED!
+```
+
+### Code Changes in `agent-api.py`
+
+**New imports:**
+```python
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
+from fastapi import File as FastAPIFile
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+```
+
+**New helper functions:**
+```python
+http_bearer = HTTPBearer(auto_error=False)
+
+def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer),
+) -> str:
+    """Extract user_id from JWT token in Authorization header."""
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = pyjwt.decode(credentials.credentials, AUTH_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token: missing sub")
+        return user_id
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except pyjwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+def verify_project_ownership(project_id: str, user_id: str) -> bool:
+    """Verify that a project belongs to the given user."""
+    conn = sqlite3.connect(PROJECTS_DB)
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT user_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    conn.close()
+    if not project:
+        return False
+    return project["user_id"] == user_id
+```
+
+**Example endpoint with ownership:**
+```python
+@custom_router.get("/projects/{project_id}")
+async def get_project(project_id: str, user_id: str = Depends(get_current_user_id)):
+    """Get project details. Must be project owner."""
+    if not verify_project_ownership(project_id, user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied: not the project owner"})
+    # ... rest of handler
+```
