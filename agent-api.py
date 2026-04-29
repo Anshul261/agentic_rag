@@ -45,7 +45,6 @@ from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.chunking.document import DocumentChunking
 from agno.knowledge.embedder.huggingface import HuggingfaceCustomEmbedder
-from agno.knowledge.embedder.ollama import OllamaEmbedder
 from agno.knowledge.knowledge import Knowledge
 from agno.knowledge.reader.pdf_reader import PDFReader
 from agno.media import File

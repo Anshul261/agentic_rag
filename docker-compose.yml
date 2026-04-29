@@ -1,0 +1,151 @@
+# =============================================================================
+# Agentic RAG - Docker Compose
+# Production-ready multi-container setup with security best practices
+# =============================================================================
+
+services:
+  # -------------------------------------------------------------------------
+  # PostgreSQL with PgVector
+  # -------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: agentic_rag_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai
+      POSTGRES_USER: ${POSTGRES_USER:-ai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Security: No root privileges needed
+    user: postgres:postgres
+
+  # -------------------------------------------------------------------------
+  # OpenSandbox Server (Python code execution)
+  # -------------------------------------------------------------------------
+  sandbox-server:
+    image: opensandbox/execd:v1.0.7
+    container_name: agentic_rag_sandbox_server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - sandbox_runtime:/var/lib/opensandbox
+    networks:
+      - app-network
+    environment:
+      SANDBOX_RUNTIME_TYPE: docker
+      # Uncomment and set for production
+      # SANDBOX_API_KEY: ${SANDBOX_API_KEY}
+
+  # -------------------------------------------------------------------------
+  # Backend API (FastAPI + AGNO)
+  # -------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: agentic_rag_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database
+      PGVECTOR_DB_URL: postgresql+psycopg://${POSTGRES_USER:-ai}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${POSTGRES_DB:-ai}
+      
+      # Azure OpenAI
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_ENDPOINT_5: ${AZURE_OPENAI_ENDPOINT_5}
+      AZURE_OPENAI_DEPLOYMENT_NAME_5: ${AZURE_OPENAI_DEPLOYMENT_NAME_5}
+      OPENAI_API_VERSION: "2024-02-15-preview"
+      
+      # HuggingFace
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY}
+      
+      # JWT Secret (critical - use strong secret in production)
+      SECRET_KEY: ${SECRET_KEY}
+      
+      # Sandbox
+      SANDBOX_DOMAIN: sandbox-server:8080
+      SANDBOX_API_KEY: ${SANDBOX_API_KEY}
+      
+      # Optional: Brave Search
+      # BRAVE_API_KEY: ${BRAVE_API_KEY}
+    ports:
+      - "7777:7777"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:7777/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Security: Read-only filesystem, no new privileges
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # Set to true if application doesn't need temp files
+    volumes:
+      - backend_data:/app
+
+  # -------------------------------------------------------------------------
+  # Frontend (Next.js)
+  # -------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: agentic_rag_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    environment:
+      # Backend proxy URL
+      NEXT_PUBLIC_API_URL: http://backend:7777
+      # Disable telemetry
+      NEXT_TELEMETRY_DISABLED: 1
+      # Node environment
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    # Security: Read-only filesystem
+    read_only: true
+    tmpfs:
+      - /app/.next/cache:size=100M,exec
+
+# -----------------------------------------------------------------------------
+# Networks
+# -----------------------------------------------------------------------------
+networks:
+  app-network:
+    driver: bridge
+
+# -----------------------------------------------------------------------------
+# Volumes
+# -----------------------------------------------------------------------------
+volumes:
+  postgres_data:
+    driver: local
+  sandbox_runtime:
+    driver: local
+  backend_data:
+    driver: local
