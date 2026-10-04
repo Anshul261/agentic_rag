@@ -1,0 +1,3 @@
+# Reference-recommended SDKs. Install into the existing GPU benchmark environment.
+typesafe-sdk==0.7.2
+pageindex==0.2.21

@@ -1,0 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+gliner2[local]==2.0.0
+transformers==4.57.6
+huggingface_hub==0.36.2

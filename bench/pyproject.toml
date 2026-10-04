@@ -1,0 +1,6 @@
+[project]
+name = "retrieval-bench"
+version = "0.1.0"
+description = "Speed / cost / accuracy test bench: Kev-4B decision-model retrieval vs BM25, dense, hybrid and LLM tree search on FinanceBench"
+requires-python = ">=3.11"
+dependencies = ["pymupdf", "httpx", "huggingface_hub", "python-dotenv", "matplotlib", "numpy", "fastembed", "tiktoken", "tokenizers"]
