@@ -3,12 +3,13 @@
 import { useMemo, useState, type ReactElement } from "react"
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { TraceEvent, TraceNode } from "@/lib/api"
+import type { Citation, TraceEvent, TraceNode } from "@/lib/api"
 
 /**
  * Compact visualization of a PageIndex search: collection -> documents opened ->
  * top-level branches -> sections actually read. The read path is highlighted;
- * sibling branches the agent saw but skipped are dimmed.
+ * sibling branches the agent saw but skipped are dimmed. Answers that came from
+ * the catalog alone show the cited documents instead.
  */
 
 const MAX_DOCS = 3
@@ -25,6 +26,7 @@ const COLS = [
 const WIDTH = 760
 
 const STAGES = ["Catalog", "Search", "Open trees", "Read", "Answer"] as const
+type StageState = "done" | "active" | "skipped" | "pending"
 
 // Boilerplate sections make poor context when shown as skipped siblings.
 const BOILERPLATE = /^(front matter|abstract|references|bibliography|acknowledg|keywords|article info|declaration|data availability|funding)/i
@@ -41,12 +43,12 @@ interface DocModel {
     title: string
     branches: Map<string, Branch>
     nRead: number
+    fromCatalog?: boolean
 }
 
-function buildModel(events: TraceEvent[]) {
+function buildModel(events: TraceEvent[], citations: Citation[]) {
     const docs = new Map<string, DocModel>()
     let nDocs = 0
-    let searches = 0
     const doc = (id: string, title: string) => {
         if (!docs.has(id)) docs.set(id, { doc_id: id, title, branches: new Map(), nRead: 0 })
         return docs.get(id)!
@@ -60,15 +62,12 @@ function buildModel(events: TraceEvent[]) {
             d.branches.set(top.node_id, b)
         }
         b.onPath = true
-        if (n.path.length > 0 && !b.leaves.some((l) => l.node_id === n.node_id)) {
-            // Middle levels are skipped in the compact view: top-level branch -> section read.
-            b.leaves.push({ ...n, figure })
-        }
+        // Middle levels are skipped in the compact view: top-level branch -> section read.
+        if (n.path.length > 0 && !b.leaves.some((l) => l.node_id === n.node_id)) b.leaves.push({ ...n, figure })
         d.nRead += 1
     }
     for (const e of events) {
         if (e.kind === "catalog") nDocs = e.n_docs
-        else if (e.kind === "search") searches += 1
         else if (e.kind === "open_doc") {
             const d = doc(e.doc_id, e.doc_title)
             for (const br of e.branches) {
@@ -78,15 +77,32 @@ function buildModel(events: TraceEvent[]) {
         } else if (e.kind === "read") e.nodes.forEach((n) => addRead(n, n.kind === "figure"))
         else if (e.kind === "figure") addRead(e, true)
     }
-    return { docs: [...docs.values()], nDocs, searches }
+    const fromCatalog = ![...docs.values()].some((d) => d.nRead > 0)
+    if (fromCatalog) {
+        // Answered from catalog summaries: the cited documents are the result.
+        for (const c of citations) {
+            const d = doc(c.doc_id, c.doc_title)
+            d.fromCatalog = true
+        }
+    }
+    return { docs: [...docs.values()], nDocs, fromCatalog: fromCatalog && citations.length > 0 }
 }
 
-function stageIndex(events: TraceEvent[], done: boolean) {
-    if (done) return STAGES.length // every stage complete
-    if (events.some((e) => e.kind === "read" || e.kind === "figure")) return 3
-    if (events.some((e) => e.kind === "open_doc")) return 2
-    if (events.some((e) => e.kind === "search")) return 1
-    return 0
+function stageStates(events: TraceEvent[], done: boolean, answered: boolean): StageState[] {
+    const seen = [
+        events.some((e) => e.kind === "catalog"),
+        events.some((e) => e.kind === "search"),
+        events.some((e) => e.kind === "open_doc"),
+        events.some((e) => e.kind === "read" || e.kind === "figure"),
+        answered,
+    ]
+    const last = seen.lastIndexOf(true)
+    return seen.map((s, i) => {
+        if (s) return "done"
+        if (done) return "skipped"
+        if (i === last + 1) return "active"
+        return i < last ? "skipped" : "pending"
+    })
 }
 
 function latestAction(events: TraceEvent[]): string {
@@ -94,7 +110,7 @@ function latestAction(events: TraceEvent[]): string {
     if (!e) return "Starting…"
     switch (e.kind) {
         case "catalog":
-            return `Scanning catalog of ${e.n_docs} documents`
+            return `Reading catalog of ${e.n_docs} documents`
         case "search":
             return `Searching “${e.query}” · ${e.hits.length} hits`
         case "open_doc":
@@ -118,19 +134,20 @@ function edge(x1: number, y1: number, x2: number, y2: number) {
 
 type Variant = "root" | "doc" | "path" | "dim" | "leaf"
 
-function Box({ x, y, w, label, sub, variant, title }: {
-    x: number; y: number; w: number; label: string; sub?: string; variant: Variant; title: string
+const VARIANTS: Record<Variant, { fill: string; stroke: string; text: string; sub: string }> = {
+    root: { fill: "var(--card)", stroke: "var(--border)", text: "var(--foreground)", sub: "var(--muted-foreground)" },
+    doc: { fill: "rgba(224,122,58,0.08)", stroke: "rgba(224,122,58,0.55)", text: "var(--foreground)", sub: "var(--muted-foreground)" },
+    path: { fill: "rgba(224,122,58,0.14)", stroke: "rgba(224,122,58,0.75)", text: "var(--foreground)", sub: "#b58a6c" },
+    dim: { fill: "var(--card)", stroke: "var(--border)", text: "#5a5a5a", sub: "#444" },
+    leaf: { fill: "#E07A3A", stroke: "#E07A3A", text: "#fff", sub: "rgba(255,255,255,0.8)" },
+}
+
+function Box({ x, y, w, label, sub, variant, title, onClick }: {
+    x: number; y: number; w: number; label: string; sub?: string; variant: Variant; title: string; onClick?: () => void
 }) {
-    const styles: Record<Variant, { fill: string; stroke: string; text: string; sub: string }> = {
-        root: { fill: "var(--card)", stroke: "var(--border)", text: "var(--foreground)", sub: "var(--muted-foreground)" },
-        doc: { fill: "rgba(224,122,58,0.08)", stroke: "rgba(224,122,58,0.55)", text: "var(--foreground)", sub: "var(--muted-foreground)" },
-        path: { fill: "rgba(224,122,58,0.14)", stroke: "rgba(224,122,58,0.75)", text: "var(--foreground)", sub: "#b58a6c" },
-        dim: { fill: "var(--card)", stroke: "var(--border)", text: "#5a5a5a", sub: "#444" },
-        leaf: { fill: "#E07A3A", stroke: "#E07A3A", text: "#fff", sub: "rgba(255,255,255,0.8)" },
-    }
-    const s = styles[variant]
+    const s = VARIANTS[variant]
     return (
-        <g className="pi-fade">
+        <g className={cn("pi-fade", onClick && "cursor-pointer")} onClick={onClick}>
             <title>{title}</title>
             <rect x={x} y={y - NODE_H / 2} width={w} height={NODE_H} rx={3} fill={s.fill} stroke={s.stroke} />
             <text x={x + 7} y={y + 1} fontSize={10.5} fill={s.text} dominantBaseline="middle"
@@ -147,10 +164,17 @@ function Box({ x, y, w, label, sub, variant, title }: {
     )
 }
 
-export function SearchTrace({ events, done, error }: { events: TraceEvent[]; done: boolean; error?: string }) {
+export function SearchTrace({ events, done, answered, error, citations = [], onOpenNode }: {
+    events: TraceEvent[]
+    done: boolean
+    answered: boolean
+    error?: string
+    citations?: Citation[]
+    onOpenNode?: (docId: string, nodeId?: string) => void
+}) {
     const [open, setOpen] = useState(true)
-    const { docs, nDocs } = useMemo(() => buildModel(events), [events])
-    const stage = stageIndex(events, done)
+    const { docs, nDocs, fromCatalog } = useMemo(() => buildModel(events, citations), [events, citations])
+    const stages = stageStates(events, done, answered)
 
     const layout = useMemo(() => {
         // Once reading starts, the read path is the story: opened-but-unread documents collapse.
@@ -170,8 +194,8 @@ export function SearchTrace({ events, done, error }: { events: TraceEvent[]; don
             const branches = [...onPath, ...dim]
             const docTop = row
             const branchYs: number[] = []
-            for (const b of branches.length ? branches : [null]) {
-                if (!b) { row += 1; continue }
+            if (branches.length === 0) row += 1
+            for (const b of branches) {
                 // Figures first: they are the most telling part of a search path.
                 const leaves = [...b.leaves].sort((x, y) => Number(y.figure) - Number(x.figure)).slice(0, MAX_LEAVES)
                 const extra = b.leaves.length - leaves.length
@@ -181,13 +205,13 @@ export function SearchTrace({ events, done, error }: { events: TraceEvent[]; don
                 const isLeafItself = b.onPath && b.leaves.length === 0
                 nodes.push(<Box key={`${d.doc_id}-${b.node_id}`} x={COLS[2].x} y={by} w={COLS[2].w}
                     label={b.title} sub={`p${b.pages}`} variant={isLeafItself ? "leaf" : b.onPath ? "path" : "dim"}
-                    title={`${b.title} (p${b.pages})`} />)
+                    title={`${b.title} (p${b.pages})`} onClick={() => onOpenNode?.(d.doc_id, b.node_id)} />)
                 leaves.forEach((l, i) => {
                     const ly = (row + i + 0.5) * ROW
                     edges.push({ d: edge(COLS[2].x + COLS[2].w, by, COLS[3].x, ly), hot: true })
                     nodes.push(<Box key={`${d.doc_id}-${l.node_id}`} x={COLS[3].x} y={ly} w={COLS[3].w}
                         label={`${l.figure ? "▣ " : ""}${l.title}`} sub={`p${l.pages}`} variant="leaf"
-                        title={`${l.title} (p${l.pages})`} />)
+                        title={`${l.title} (p${l.pages})`} onClick={() => onOpenNode?.(d.doc_id, l.node_id)} />)
                 })
                 if (extra > 0) {
                     nodes.push(<text key={`${d.doc_id}-${b.node_id}-more`} x={COLS[3].x + 6} y={(row + leaves.length + 0.5) * ROW}
@@ -201,8 +225,10 @@ export function SearchTrace({ events, done, error }: { events: TraceEvent[]; don
             branchYs.forEach((by, i) => edges.push({
                 d: edge(COLS[1].x + COLS[1].w, dy, COLS[2].x, by), hot: branches[i]?.onPath ?? false,
             }))
+            const hot = d.nRead > 0 || d.fromCatalog
             nodes.push(<Box key={d.doc_id} x={COLS[1].x} y={dy} w={COLS[1].w} label={d.title}
-                sub={d.nRead ? `${d.nRead}✓` : undefined} variant={d.nRead ? "doc" : "dim"} title={d.title} />)
+                sub={d.nRead ? `${d.nRead}✓` : d.fromCatalog ? "cited" : undefined}
+                variant={hot ? "doc" : "dim"} title={d.title} onClick={() => onOpenNode?.(d.doc_id)} />)
             row += 0.35 // gap between documents
         }
         const hidden = candidates.length - shown.length
@@ -217,48 +243,56 @@ export function SearchTrace({ events, done, error }: { events: TraceEvent[]; don
         const height = Math.max(row, 1.2) * ROW
         const rootY = docYs.length ? (docYs[0] + docYs[docYs.length - 1]) / 2 : height / 2
         docYs.forEach((dy, i) => edges.push({
-            d: edge(COLS[0].x + COLS[0].w, rootY, COLS[1].x, dy), hot: (shown[i]?.nRead ?? 0) > 0,
+            d: edge(COLS[0].x + COLS[0].w, rootY, COLS[1].x, dy),
+            hot: (shown[i]?.nRead ?? 0) > 0 || !!shown[i]?.fromCatalog,
         }))
         nodes.unshift(<Box key="root" x={COLS[0].x} y={rootY} w={COLS[0].w} label={`${nDocs} docs`}
             variant="root" title={`Collection: ${nDocs} documents`} />)
         return { nodes, edges, height }
-    }, [docs, nDocs])
+    }, [docs, nDocs, onOpenNode])
 
     const nRead = docs.reduce((a, d) => a + d.nRead, 0)
+    const summary = fromCatalog
+        ? `answered from catalog · ${docs.length} doc${docs.length === 1 ? "" : "s"} cited`
+        : `${docs.filter((d) => d.nRead > 0).length || docs.length} doc${docs.length === 1 ? "" : "s"} · ${nRead} section${nRead === 1 ? "" : "s"} read`
+    const status = error ? `Error: ${error}` : done ? (answered ? "Done" : "Finished without an answer") : latestAction(events)
 
     return (
         <div className="border border-border rounded-sm bg-card/60 px-3 py-2 font-mono">
             <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 text-left">
                 {open ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Search path</span>
-                <span className="text-[10px] text-muted-foreground">
-                    · {docs.length} doc{docs.length === 1 ? "" : "s"} · {nRead} section{nRead === 1 ? "" : "s"} read
-                </span>
-                {!done && <Loader2 className="w-3 h-3 text-primary animate-spin ml-auto" />}
+                <span className="text-[10px] text-muted-foreground truncate">· {summary}</span>
+                {!done && <Loader2 className="w-3 h-3 text-primary animate-spin ml-auto shrink-0" />}
             </button>
 
             {open && (
                 <>
-                    {/* Stage timeline */}
                     <div className="mt-2.5 mb-1 flex items-center">
                         {STAGES.map((s, i) => (
                             <div key={s} className={cn("flex items-center", i < STAGES.length - 1 && "flex-1")}>
-                                <div className="flex flex-col items-start">
-                                    <div className={cn(
-                                        "w-2 h-2 rounded-full border transition-colors",
-                                        i < stage ? "bg-primary border-primary" :
-                                        i === stage ? "border-primary bg-transparent" : "border-border bg-transparent",
-                                    )} />
-                                </div>
+                                <div className={cn(
+                                    "w-2 h-2 rounded-full border transition-colors",
+                                    stages[i] === "done" && "bg-primary border-primary",
+                                    stages[i] === "active" && "border-primary animate-pulse",
+                                    stages[i] === "skipped" && "border-border border-dashed",
+                                    stages[i] === "pending" && "border-border",
+                                )} />
                                 {i < STAGES.length - 1 && (
-                                    <div className={cn("h-px flex-1 mx-1 transition-colors", i < stage ? "bg-primary" : "bg-border")} />
+                                    <div className={cn("h-px flex-1 mx-1",
+                                        stages[i + 1] === "done" ? "bg-primary" : "bg-border")} />
                                 )}
                             </div>
                         ))}
                     </div>
-                    <div className="flex justify-between text-[9px] uppercase tracking-wider text-muted-foreground mb-2">
+                    <div className="flex justify-between text-[9px] uppercase tracking-wider mb-2">
                         {STAGES.map((s, i) => (
-                            <span key={s} className={cn(i === stage && !done && "text-primary", i <= stage && done && "text-foreground/70")}>{s}</span>
+                            <span key={s} className={cn(
+                                stages[i] === "done" && "text-foreground/75",
+                                stages[i] === "active" && "text-primary",
+                                (stages[i] === "skipped" || stages[i] === "pending") && "text-muted-foreground/60",
+                                stages[i] === "skipped" && "line-through decoration-muted-foreground/40",
+                            )} title={stages[i] === "skipped" ? "Not needed for this question" : undefined}>{s}</span>
                         ))}
                     </div>
 
@@ -274,8 +308,9 @@ export function SearchTrace({ events, done, error }: { events: TraceEvent[]; don
                     )}
 
                     <div className="mt-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-                        <span className={cn("w-1.5 h-1.5 rounded-full", done ? "bg-muted-foreground" : "bg-primary animate-pulse")} />
-                        <span className="truncate">{error ? `Error: ${error}` : done ? "Done" : latestAction(events)}</span>
+                        <span className={cn("w-1.5 h-1.5 rounded-full shrink-0",
+                            error ? "bg-destructive" : done ? "bg-muted-foreground" : "bg-primary animate-pulse")} />
+                        <span className={cn("truncate", error && "text-destructive")}>{status}</span>
                     </div>
                 </>
             )}

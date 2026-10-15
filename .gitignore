@@ -38,3 +38,5 @@ token.json
 db_data/
 # pageindex_rag index output
 data/
+.next-*
+*.tsbuildinfo

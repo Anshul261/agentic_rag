@@ -196,3 +196,23 @@
   to { opacity: 1; transform: none; }
 }
 .pi-fade { animation: pi-in 380ms ease-out both; }
+
+/* Answer markdown (no typography plugin): compact, readable, terminal-styled */
+.answer-md { line-height: 1.65; font-family: var(--font-inter), system-ui, sans-serif; }
+.answer-md > * + * { margin-top: 0.7em; }
+.answer-md h1, .answer-md h2, .answer-md h3 { font-weight: 600; margin-top: 1em; }
+.answer-md ul { list-style: disc; padding-left: 1.25em; }
+.answer-md ol { list-style: decimal; padding-left: 1.25em; }
+.answer-md li + li { margin-top: 0.25em; }
+.answer-md strong { color: var(--foreground); font-weight: 600; }
+.answer-md code { font-family: var(--font-mono); font-size: 0.85em; background: var(--muted); padding: 0.1em 0.3em; border-radius: 2px; }
+.answer-md table { width: 100%; border-collapse: collapse; font-size: 0.82em; display: block; overflow-x: auto; }
+.answer-md th, .answer-md td { border: 1px solid var(--border); padding: 0.4em 0.6em; text-align: left; vertical-align: top; }
+.answer-md th { background: var(--muted); font-weight: 600; }
+.answer-md a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.cite-ref {
+  font-family: var(--font-mono); font-size: 0.72em; color: var(--primary);
+  vertical-align: super; line-height: 0; padding: 0 0.1em; cursor: pointer;
+}
+.cite-ref:hover { text-decoration: underline; }
+.cite-ref:disabled { color: var(--muted-foreground); cursor: default; }

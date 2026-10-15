@@ -1,8 +1,6 @@
 import type React from "react"
 import type { Metadata } from "next"
 import { JetBrains_Mono, Inter } from "next/font/google"
-import { Analytics } from "@vercel/analytics/next"
-import { AuthProvider } from "@/components/providers/auth-provider"
 import "./globals.css"
 
 const jetbrainsMono = JetBrains_Mono({
@@ -18,24 +16,14 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
-  title: "UI-Illuminati",
-  description: "Agentic AI — Intelligent Autonomous Agents",
-    generator: 'v0.app'
+  title: "PageIndex",
+  description: "Reasoning-based tree search over your documents",
 }
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={`${jetbrainsMono.variable} ${inter.variable} font-mono antialiased`} suppressHydrationWarning>
-        <AuthProvider>
-          {children}
-        </AuthProvider>
-        <Analytics />
-      </body>
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body className={`${jetbrainsMono.variable} ${inter.variable} font-mono antialiased`}>{children}</body>
     </html>
   )
 }

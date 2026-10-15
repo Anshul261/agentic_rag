@@ -5,9 +5,8 @@
     uv run -m pageindex_rag.cli docs [--collection NAME]
     uv run -m pageindex_rag.cli ask "question" [--collection NAME] [--max-turns N]
 
-`index` runs the whole pipeline per file: parse (Docling, cached as tree.json)
--> skip duplicates by title -> enrich (cheap LLM summaries + figure
-descriptions) -> store in Postgres. Every stage is idempotent.
+`index` runs the shared pipeline (pipeline.py): parse -> fix titles -> dedupe
+-> enrich -> store. Every stage is idempotent.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import time
 from pathlib import Path
 
 from .models import DocTree
@@ -35,97 +33,21 @@ def _collect(paths: list[str]) -> list[Path]:
     return files
 
 
-def _counts(tree: DocTree) -> str:
-    nodes = list(tree.walk())
-    return " ".join(f"{k}={sum(n.kind == k for n in nodes)}" for k in ("section", "figure", "table"))
-
-
-def _parse_all(files: list[Path], out: Path, force: bool) -> list[DocTree]:
-    from .parsing import IsolatedParser, file_id
-
-    parser = IsolatedParser()
-    trees: dict[str, DocTree] = {}
-    try:
-        for f in files:
-            doc_id = file_id(f)
-            if doc_id in trees:
-                print(f"skip  duplicate file  {f.name}")
-                continue
-            cached = out / doc_id / "tree.json"
-            if cached.exists() and not force:
-                trees[doc_id] = DocTree.model_validate_json(cached.read_text())
-                continue
-            t = time.time()
-            try:
-                trees[doc_id] = parser.parse(f, out)
-            except Exception as e:  # one bad file shouldn't stop a batch
-                print(f"FAIL  parse  {f.name}: {type(e).__name__}: {e}")
-                continue
-            print(f"parse {time.time() - t:5.1f}s  {doc_id}  {_counts(trees[doc_id])}  {f.name}")
-    finally:
-        parser.close()
-    return list(trees.values())
-
-
-async def _enrich_and_store(trees: list[DocTree], out: Path, collection: str, use_llm: bool, force: bool) -> None:
-    from .store import Store, title_key
-
-    store = Store()
-    llm = None
-    if use_llm:
-        from .llm import LLM
-
-        llm = LLM()
-
-    # Titles first: dedupe below depends on them, and the parser often picks the journal name.
-    retitled: set[str] = set()
-    if llm:
-        from .summarize import fix_title
-
-        todo = [t for t in trees if not t.title_verified]
-        for tree, changed in zip(todo, await asyncio.gather(*(fix_title(llm, t) for t in todo))):
-            (out / tree.doc_id / "tree.json").write_text(tree.model_dump_json(indent=2))
-            if changed:
-                retitled.add(tree.doc_id)
-                print(f"title {tree.doc_id}  {tree.title[:90]}")
-
-    # Same paper saved as two different files: keep the first by title.
-    kept: dict[str, DocTree] = {}
-    for tree in trees:
-        key = title_key(tree.title)
-        dup = kept.get(key)
-        existing = store.find_duplicate(collection, tree)
-        if dup or existing:
-            print(f"skip  duplicate title  {tree.filename}  (same as {dup.filename if dup else existing})")
-            continue
-        kept[key] = tree
-
-    async def one(tree: DocTree) -> None:
-        enriched = tree.summary is not None
-        if store.has(collection, tree.doc_id) and enriched and not force and tree.doc_id not in retitled:
-            return
-        t = time.time()
-        try:
-            if llm and not enriched:
-                from .summarize import enrich
-
-                await enrich(llm, tree, out / tree.doc_id)
-                (out / tree.doc_id / "tree.json").write_text(tree.model_dump_json(indent=2))
-            store.upsert(collection, tree)
-        except Exception as e:
-            print(f"FAIL  enrich {tree.filename}: {type(e).__name__}: {e}")
-            return
-        print(f"store {time.time() - t:5.1f}s  {tree.doc_id}  {tree.filename[:70]}")
-
-    await asyncio.gather(*(one(t) for t in kept.values()))
-    if llm:
-        print(f"\nLLM: {llm.calls} calls, ${llm.cost_usd:.4f} ({len(kept)} docs in '{collection}')")
+def _print_progress(p) -> None:
+    tags = {"parsed": "parse", "cached": None, "failed": "FAIL ", "duplicate": "skip ", "titled": "title",
+            "stored": "store", "skipped": None, "done": "\nLLM:"}
+    tag = tags.get(p.kind, p.kind)
+    if tag:
+        print(f"{tag}  {p.doc_id or ''}  {p.message}  {p.filename}".rstrip())
 
 
 def cmd_index(args: argparse.Namespace) -> None:
+    from .pipeline import enrich_and_store, parse_all
+
     out = Path(args.out)
-    trees = _parse_all(_collect(args.paths), out, args.force)
-    asyncio.run(_enrich_and_store(trees, out, args.collection, not args.no_llm, args.force))
+    trees = parse_all(_collect(args.paths), out, _print_progress, force=args.force)
+    asyncio.run(enrich_and_store(trees, out, args.collection, _print_progress,
+                                 use_llm=not args.no_llm, force=args.force))
 
 
 def cmd_show(args: argparse.Namespace) -> None:
@@ -146,6 +68,9 @@ def cmd_docs(args: argparse.Namespace) -> None:
 async def _ask(args: argparse.Namespace) -> None:
     from .runner import format_report, run_question
 
+    from .telemetry import setup_tracing
+
+    setup_tracing()
     report = await run_question(args.question, args.collection, Path(args.out), max_turns=args.max_turns,
                                 on_tool=lambda name, a: print(f"  → {name}({a[:150]})"))
     print(format_report(report))

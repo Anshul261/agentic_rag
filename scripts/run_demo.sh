@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One command to run the PageIndex demo: database, deps, index, backend, frontend.
+# One command to run PageIndex: database, deps, index, API server, UI.
 #
 #   ./scripts/run_demo.sh            start everything (Ctrl+C stops it all)
 #   ./scripts/run_demo.sh --check    also ask one live question first, as a smoke test
@@ -8,6 +8,9 @@
 #   PAGEINDEX_DOCS   folder to index if the collection is empty
 #                    (default: your Literature Review folder)
 #   COLLECTION       collection name (default: litreview)
+#   API_PORT         API server port (default 7777)
+#   UI_PORT          UI port (default 3000)
+#   OTEL_EXPORTER_OTLP_ENDPOINT   export OpenTelemetry traces (off by default)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,6 +19,8 @@ COLLECTION="${COLLECTION:-litreview}"
 DOCS="${PAGEINDEX_DOCS:-/mnt/c/Users/USER/OneDrive/Desktop/Birmingham/Dissertation/Literature Review}"
 LOGS="$ROOT/logs"
 DB_CONTAINER=pageindex_pg
+API_PORT="${API_PORT:-7777}"
+UI_PORT="${UI_PORT:-3000}"
 mkdir -p "$LOGS"
 
 step() { printf '\n\033[38;5;208m▸ %s\033[0m\n' "$*"; }
@@ -30,15 +35,14 @@ command -v docker >/dev/null || fail "docker not found. Start Docker Desktop and
 [ -e .env ] || fail ".env missing. Link it:  ln -s /home/anshul/projects/agentic_rag/.env $ROOT/.env"
 uv run python -c "
 from dotenv import load_dotenv; import os, sys; load_dotenv()
-missing = [k for k in ('OPENROUTER_KEY', 'SECRET_KEY') if not os.getenv(k)]
-sys.exit(f'missing in .env: {missing}' if missing else 0)" || fail "required keys missing from .env"
-ok ".env has OPENROUTER_KEY and SECRET_KEY (values not shown)"
-for port in 7777 3000; do
+sys.exit(0 if os.getenv('OPENROUTER_KEY') else 'OPENROUTER_KEY missing in .env')" || fail "OPENROUTER_KEY missing from .env"
+ok ".env has OPENROUTER_KEY (value not shown)"
+for port in "$API_PORT" "$UI_PORT"; do
   if ss -ltn 2>/dev/null | grep -q ":$port "; then
-    fail "port $port is already in use (is the main app running?). Stop it and retry"
+    fail "port $port is already in use (another app or an earlier run?). Stop it, or set API_PORT / UI_PORT"
   fi
 done
-ok "ports 7777 and 3000 are free"
+ok "ports $API_PORT and $UI_PORT are free"
 
 # ---------------------------------------------------------------- database
 step "Database ($DB_CONTAINER on 127.0.0.1:5534)"
@@ -103,23 +107,24 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-uv run agent-api.py > "$LOGS/backend.log" 2>&1 & pids+=($!)
-(cd UI-Iluminati && npm run dev -- -p 3000) > "$LOGS/frontend.log" 2>&1 & pids+=($!)
+PAGEINDEX_UI_ORIGINS="http://localhost:$UI_PORT,http://127.0.0.1:$UI_PORT" \
+  uv run uvicorn pageindex_rag.server:app --port "$API_PORT" > "$LOGS/backend.log" 2>&1 & pids+=($!)
+(cd UI-Iluminati && NEXT_PUBLIC_PAGEINDEX_API="http://localhost:$API_PORT" npm run dev -- -p "$UI_PORT") \
+  > "$LOGS/frontend.log" 2>&1 & pids+=($!)
 
-for _ in $(seq 1 90); do curl -sf localhost:7777/health >/dev/null && break; sleep 1; done
-curl -sf localhost:7777/health >/dev/null || { tail -20 "$LOGS/backend.log"; fail "backend did not start"; }
-ok "backend  http://localhost:7777"
-for _ in $(seq 1 90); do curl -s -o /dev/null -w '%{http_code}' localhost:3000/login | grep -q 200 && break; sleep 1; done
-ok "frontend http://localhost:3000"
+for _ in $(seq 1 90); do curl -sf "localhost:$API_PORT/health" >/dev/null && break; sleep 1; done
+curl -sf "localhost:$API_PORT/health" >/dev/null || { tail -20 "$LOGS/backend.log"; fail "API server did not start"; }
+ok "API  http://localhost:$API_PORT   ($(grep -o 'model [^·]*· prompt [^·]*' "$LOGS/backend.log" | head -1))"
+for _ in $(seq 1 90); do curl -s -o /dev/null -w '%{http_code}' "localhost:$UI_PORT" | grep -q 200 && break; sleep 1; done
+ok "UI   http://localhost:$UI_PORT"
 
 cat <<EOF
 
-  ┌──────────────────────────────────────────────────────────────────┐
-  │  Open  http://localhost:3000/pageindex                           │
-  │  First time: sign up at /signup (this worktree has its own users)│
-  │  Test questions:  docs/TEST_QUESTIONS.md                         │
-  │  Replay dropdown: saved runs, no LLM cost (good for demos)       │
-  │  Logs: logs/backend.log, logs/frontend.log  ·  Ctrl+C to stop    │
-  └──────────────────────────────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────────────────┐
+  │  Open  http://localhost:$UI_PORT                                   │
+  │  Test questions: docs/TEST_QUESTIONS.md                       │
+  │  Recorded tab: replay past answers with no LLM cost           │
+  │  Logs: logs/backend.log, logs/frontend.log · Ctrl+C to stop   │
+  └───────────────────────────────────────────────────────────────┘
 EOF
 wait
