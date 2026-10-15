@@ -54,6 +54,7 @@ _TOP_LEVEL = re.compile(
 _PUA_LIGATURE = re.compile(r"(?<=[A-Za-z])[-]|[-](?=[a-z])")
 _SPACED_CAPS = re.compile(r"^(?:[A-Z] ){2,}[A-Z]$")  # "A B S T R A C T"
 
+TREE_BUILDER_VERSION = 1  # bump when build_tree logic changes
 MIN_FIGURE_PX = 150  # uncaptioned images smaller than this are logos/icons
 
 
@@ -251,4 +252,7 @@ def build_tree(doc: DoclingDocument, doc_id: str, filename: str, doc_dir: Path) 
             attach(Node(node_id=next_id(), kind="figure", title=caption or f"Figure (p{page}, no caption)",
                         level=99, page_start=page, page_end=page, text=caption, image_path=rel), page)
 
-    return DocTree(doc_id=doc_id, filename=filename, title=title, n_pages=doc.num_pages(), nodes=roots)
+    from importlib.metadata import version
+
+    return DocTree(doc_id=doc_id, filename=filename, title=title, n_pages=doc.num_pages(), nodes=roots,
+                   parser_version=f"docling-{version('docling')}+tree-{TREE_BUILDER_VERSION}")

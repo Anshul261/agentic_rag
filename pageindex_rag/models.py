@@ -41,6 +41,7 @@ class DocTree(BaseModel):
     filename: str
     title: str
     n_pages: int
+    parser_version: str = ""  # re-index when this changes
     summary: str | None = None
     nodes: list[Node] = Field(default_factory=list)
 

@@ -10,6 +10,7 @@ dependencies = [
     "fastapi>=0.135.2",
     "huggingface-hub>=1.8.0",
     "langchain-openai>=1.1.12",
+    "openai>=2.30.0",
     "opensandbox>=0.1.6",
     "opensandbox-server>=0.1.9",
     "psycopg>=3.3.3",
