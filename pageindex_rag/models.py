@@ -42,6 +42,7 @@ class DocTree(BaseModel):
     title: str
     n_pages: int
     parser_version: str = ""  # re-index when this changes
+    title_verified: bool = False  # title confirmed by the LLM from front matter
     summary: str | None = None
     nodes: list[Node] = Field(default_factory=list)
 

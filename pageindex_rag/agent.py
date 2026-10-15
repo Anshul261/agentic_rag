@@ -3,6 +3,12 @@
 Runs on OpenRouter through Chat Completions (not the Responses API), with
 strict feature validation so unsupported features fail loudly instead of
 being silently dropped. SDK tracing to OpenAI is disabled.
+
+Cost design: the collection catalog is part of the system prompt. It is
+identical across every turn and every question, so it stays in the provider's
+prompt cache (95% cheaper than fresh input) and saves a tool round-trip. We do
+not trim old tool outputs mid-run: rewriting earlier context would invalidate
+the cached prefix and cost more than it saves.
 """
 
 from __future__ import annotations
@@ -22,25 +28,35 @@ from agents import (
 
 from . import tools
 from .config import settings
+from .store import Store
 from .tools import ToolContext
 
 set_tracing_disabled(True)
 
-INSTRUCTIONS = """You answer questions about a collection of documents by navigating their
-section trees, like a researcher using tables of contents. You never see the full text up front.
+CATALOG_INLINE_MAX_DOCS = 150  # above this, the agent pages the catalog via a tool
 
-How to work:
-1. Find candidate documents and sections. Use list_documents to see every document's summary,
-   and search_nodes for specific terms (methods, datasets, metrics, names).
-2. Open get_tree for the most promising documents and reason over section titles and summaries
-   to choose the nodes that should contain the answer.
-3. read_nodes for just those nodes. For questions about diagrams, charts or architectures,
-   use look_at_figure on the relevant figure node.
-4. If what you read is not enough, go back to the trees and read more. Prefer several targeted
-   reads over reading everything.
-5. Answer only from what you read. Cite every claim inline as [n], where n indexes your
-   citations list. If the collection does not contain the answer, say so plainly.
-For comparisons across papers, cover each relevant paper explicitly."""
+INSTRUCTIONS = """You answer questions about a document collection by navigating it like a
+researcher: a catalog of documents, then each document's table-of-contents tree, then the
+specific sections. You never see full text unless you read it.
+
+Pick the cheapest strategy that fully answers the question:
+- Listing / "which documents are about X" / collection overview: answer from the CATALOG below.
+  Judge every catalog entry; include borderline documents only if their summary supports it.
+  Open trees only when a summary is too vague to decide.
+- One specific document: get_tree for it, then read_nodes for the nodes that should hold the answer.
+- A topic across many documents (comparisons, "which papers use X and what results"):
+  search_nodes first to jump straight to relevant sections, use the catalog to spot documents
+  search may have missed, then read the chosen nodes of ALL documents in ONE read_nodes call.
+  Only open a tree when you need a document's structure to find the right node.
+- Charts, diagrams, architectures, plotted values: look_at_figure on the figure node.
+
+Batch work: request several tool calls in the same turn, and read many nodes per read_nodes
+call instead of one at a time. Do not reread nodes you already have.
+
+Answer only from what you read (catalog summaries count for listing questions). Cite every
+claim inline as [n], where n indexes your citations list; for a catalog-level fact cite the
+document with node_id "catalog". If the collection does not contain the answer, say so
+plainly. For comparisons, cover each relevant document explicitly."""
 
 
 class Citation(BaseModel):
@@ -64,22 +80,24 @@ def list_documents(ctx: RunContextWrapper[ToolContext]) -> str:
 @function_tool
 def search_nodes(ctx: RunContextWrapper[ToolContext], query: str) -> str:
     """Keyword search over section/figure/table titles, summaries and text across all documents.
-    Returns matching nodes with doc_id, node_id, pages and summary. Good for specific terms."""
-    return tools.search_nodes(ctx.context, query)
+    Returns the best matching nodes with doc_id, node_id, pages and summary."""
+    return tools.search_nodes(ctx.context, query, limit=20)
 
 
 @function_tool
 def get_tree(ctx: RunContextWrapper[ToolContext], doc_id: str) -> str:
-    """Show a document's section tree: node ids, titles, page ranges, sizes and summaries
+    """Show one document's section tree: node ids, titles, page ranges, sizes and summaries
     (figures and tables are tagged). Use it to decide which nodes to read."""
     return tools.get_tree(ctx.context, doc_id)
 
 
 @function_tool
-def read_nodes(ctx: RunContextWrapper[ToolContext], doc_id: str, node_ids: list[str]) -> str:
-    """Read the full text of specific nodes of one document (with page numbers).
-    Text of up to ~12k tokens per call; request fewer nodes if truncated."""
-    return tools.read_nodes(ctx.context, doc_id, node_ids)
+async def read_nodes(ctx: RunContextWrapper[ToolContext], refs: list[str], focus: str) -> str:
+    """Read the content of nodes, possibly from several documents at once.
+    refs: "doc_id:node_id" strings, e.g. ["20d48ed184a74ce7:0031", "95d850e1d80e7bfb:0012"].
+    focus: what you are looking for in these nodes (e.g. "resampling method and reported F1/AUC").
+    Returns up to ~12k tokens per call; request fewer nodes if output is truncated."""
+    return await tools.read_refs(ctx.context, refs, focus)
 
 
 @function_tool
@@ -88,14 +106,27 @@ async def look_at_figure(ctx: RunContextWrapper[ToolContext], doc_id: str, node_
     return await tools.look_at_figure(ctx.context, doc_id, node_id, question)
 
 
-def build_agent() -> Agent[ToolContext]:
+def build_agent(collection: str, store: Store) -> Agent[ToolContext]:
+    docs = store.list_documents(collection)
+    agent_tools = [search_nodes, get_tree, read_nodes, look_at_figure]
+    if len(docs) <= CATALOG_INLINE_MAX_DOCS:
+        catalog = "\n".join(f"- doc_id={d} | {t} ({p} pages): {s or ''}" for d, t, p, s in docs)
+        instructions = f"{INSTRUCTIONS}\n\nCATALOG ({len(docs)} documents):\n{catalog}"
+    else:
+        instructions = INSTRUCTIONS.replace("from the CATALOG below", "from list_documents")
+        agent_tools.insert(0, list_documents)
     return Agent[ToolContext](
         name="pageindex-researcher",
-        instructions=INSTRUCTIONS,
+        instructions=instructions,
         model=settings.reasoning_model,
-        tools=[list_documents, search_nodes, get_tree, read_nodes, look_at_figure],
+        tools=agent_tools,
         output_type=Answer,
-        model_settings=ModelSettings(include_usage=True, parallel_tool_calls=True),
+        model_settings=ModelSettings(
+            include_usage=True,
+            parallel_tool_calls=True,
+            preserve_raw_usage=True,  # keep OpenRouter's billed cost per response
+            extra_body={"usage": {"include": True}},
+        ),
     )
 
 

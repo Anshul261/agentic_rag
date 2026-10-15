@@ -64,6 +64,9 @@ class Store:
         self.conn = psycopg.connect(url, autocommit=True)
         self.conn.execute(SCHEMA)
 
+    def delete(self, collection: str, doc_id: str) -> None:
+        self.conn.execute("delete from documents where collection=%s and doc_id=%s", (collection, doc_id))
+
     def find_duplicate(self, collection: str, tree: DocTree) -> str | None:
         row = self.conn.execute(
             "select doc_id from documents where collection=%s and title_key=%s and doc_id<>%s",

@@ -25,6 +25,9 @@ class Settings:
     # Dedicated container `pageindex_pg` (pgvector/pgvector:pg17), separate from the app's DBs
     db_url: str = field(default_factory=lambda: _env(
         "PAGEINDEX_DB_URL", "postgresql://pageindex:pageindex@127.0.0.1:5534/pageindex"))
+    # full: the reasoning model reads raw section text.
+    # extract: the cheap model reads sections and returns only evidence relevant to the focus.
+    read_mode: str = field(default_factory=lambda: _env("PAGEINDEX_READ_MODE", "full"))
     llm_concurrency: int = 8
     summary_batch_tokens: int = 60_000  # rough token budget per summarize call
 

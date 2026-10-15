@@ -37,6 +37,29 @@ bar chart, line plot, ROC curve, table image, screenshot...), what it shows, and
 values or takeaways readable from it. Be factual; do not guess unreadable values."""
 
 
+TITLE_SYSTEM = """Identify the document's real title from its first page text. Papers often print the
+journal or publisher name ("Expert Systems With Applications", "ORIGINAL ARTICLE", "RESEARCH") above the
+title; that is NOT the title. Return the title exactly as printed, without author names."""
+
+
+class DocTitle(BaseModel):
+    title: str
+
+
+async def fix_title(llm: LLM, tree: DocTree) -> bool:
+    """Replace the parser's title guess with the real one. Returns True if it changed."""
+    first = [n for n in tree.walk() if n.page_start == 1][:8]
+    text = "\n".join(f"{n.title}\n{n.text[:600]}" for n in first)
+    user = f"File name: {tree.filename}\nParser's title guess: {tree.title}\n\nFirst page:\n{text[:4000]}"
+    result = await llm.structured(settings.cheap_model, TITLE_SYSTEM, user, DocTitle)
+    tree.title_verified = True
+    new = result.title.strip()
+    if new and new != tree.title:
+        tree.title = new
+        return True
+    return False
+
+
 class NodeSummary(BaseModel):
     node_id: str
     summary: str

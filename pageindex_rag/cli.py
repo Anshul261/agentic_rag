@@ -77,6 +77,18 @@ async def _enrich_and_store(trees: list[DocTree], out: Path, collection: str, us
 
         llm = LLM()
 
+    # Titles first: dedupe below depends on them, and the parser often picks the journal name.
+    retitled: set[str] = set()
+    if llm:
+        from .summarize import fix_title
+
+        todo = [t for t in trees if not t.title_verified]
+        for tree, changed in zip(todo, await asyncio.gather(*(fix_title(llm, t) for t in todo))):
+            (out / tree.doc_id / "tree.json").write_text(tree.model_dump_json(indent=2))
+            if changed:
+                retitled.add(tree.doc_id)
+                print(f"title {tree.doc_id}  {tree.title[:90]}")
+
     # Same paper saved as two different files: keep the first by title.
     kept: dict[str, DocTree] = {}
     for tree in trees:
@@ -90,7 +102,7 @@ async def _enrich_and_store(trees: list[DocTree], out: Path, collection: str, us
 
     async def one(tree: DocTree) -> None:
         enriched = tree.summary is not None
-        if store.has(collection, tree.doc_id) and enriched and not force:
+        if store.has(collection, tree.doc_id) and enriched and not force and tree.doc_id not in retitled:
             return
         t = time.time()
         try:
@@ -132,34 +144,11 @@ def cmd_docs(args: argparse.Namespace) -> None:
 
 
 async def _ask(args: argparse.Namespace) -> None:
-    import json
+    from .runner import format_report, run_question
 
-    from agents import Runner
-
-    from .agent import build_agent, run_config
-    from .llm import LLM
-    from .store import Store
-    from .tools import ToolContext
-
-    llm = LLM()
-    ctx = ToolContext(store=Store(), collection=args.collection, data_dir=Path(args.out), llm=llm)
-    t = time.time()
-    result = Runner.run_streamed(build_agent(), args.question, context=ctx,
-                                 max_turns=args.max_turns, run_config=run_config())
-    async for ev in result.stream_events():
-        if ev.type == "run_item_stream_event" and ev.name == "tool_called":
-            raw = ev.item.raw_item
-            name = getattr(raw, "name", None) or raw.get("name")
-            arguments = getattr(raw, "arguments", None) or raw.get("arguments") or ""
-            print(f"  → {name}({arguments[:150]})")
-
-    answer = result.final_output
-    print(f"\n{answer.answer}\n")
-    for i, c in enumerate(answer.citations, 1):
-        print(f"  [{i}] {c.doc_title[:80]} — node {c.node_id}, p{c.pages}  ({c.doc_id})")
-    u = result.context_wrapper.usage
-    print(f"\n{time.time() - t:.0f}s · {u.requests} model calls · {u.input_tokens:,} in / {u.output_tokens:,} out tokens"
-          f" · figure calls ${llm.cost_usd:.4f}")
+    report = await run_question(args.question, args.collection, Path(args.out), max_turns=args.max_turns,
+                                on_tool=lambda name, a: print(f"  → {name}({a[:150]})"))
+    print(format_report(report))
 
 
 def cmd_ask(args: argparse.Namespace) -> None:
