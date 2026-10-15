@@ -189,3 +189,10 @@
   --tw-prose-th-borders: #2A2A2A;
   --tw-prose-td-borders: #1A1A1A;
 }
+
+/* PageIndex search trace: nodes and edges fade in as the agent reaches them */
+@keyframes pi-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.pi-fade { animation: pi-in 380ms ease-out both; }

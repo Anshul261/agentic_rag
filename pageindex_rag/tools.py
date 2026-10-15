@@ -40,16 +40,21 @@ def list_documents(ctx: ToolContext) -> str:
     return "\n\n".join(f"doc_id={d} | {t} ({p} pages)\n{s or ''}" for d, t, p, s in rows)
 
 
-def search_nodes(ctx: ToolContext, query: str, limit: int = 15) -> str:
+def search_rows(ctx: ToolContext, query: str, limit: int = 15) -> list[tuple]:
+    """(doc_title, doc_id, node_id, kind, title, page_start, page_end, summary), best first."""
     words = [w for w in re.findall(r"[A-Za-z0-9]+", query) if len(w) > 2]
     if not words:
-        return "No searchable terms in query."
-    rows = ctx.store.conn.execute(
+        return []
+    return ctx.store.conn.execute(
         """select d.title, n.doc_id, n.node_id, n.kind, n.title, n.page_start, n.page_end, n.summary
              from nodes n join documents d using (collection, doc_id)
             where n.collection=%s and n.tsv @@ to_tsquery('english', %s)
             order by ts_rank_cd(n.tsv, to_tsquery('english', %s)) desc limit %s""",
         (ctx.collection, " | ".join(words), " | ".join(words), limit)).fetchall()
+
+
+def search_nodes(ctx: ToolContext, query: str, limit: int = 15) -> str:
+    rows = search_rows(ctx, query, limit)
     if not rows:
         return "No matches."
     return "\n".join(f"[{doc_title[:60]}] doc_id={d} node={nid} ({kind}, p{ps}-{pe}) {title} — {summ or ''}"

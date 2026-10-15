@@ -458,3 +458,153 @@ export async function closeSandbox(): Promise<boolean> {
         return false;
     }
 }
+
+// ============================================================================
+// PageIndex (reasoning-based tree RAG)
+// ============================================================================
+
+export interface PageIndexCollection {
+    name: string;
+    n_docs: number;
+}
+
+export interface PageIndexRun {
+    run_id: string;
+    question: string;
+    collection: string;
+}
+
+export interface TraceNode {
+    node_id: string;
+    title: string;
+    pages: string;
+    kind?: string;
+}
+
+export type TraceEvent =
+    | { kind: "catalog"; n_docs: number }
+    | {
+          kind: "search";
+          query: string;
+          hits: (TraceNode & { doc_id: string; doc_title: string })[];
+      }
+    | {
+          kind: "open_doc";
+          doc_id: string;
+          doc_title: string;
+          n_pages: number;
+          branches: TraceNode[];
+      }
+    | {
+          kind: "read";
+          nodes: (TraceNode & {
+              doc_id: string;
+              doc_title: string;
+              path: TraceNode[];
+          })[];
+      }
+    | (TraceNode & {
+          kind: "figure";
+          doc_id: string;
+          doc_title: string;
+          path: TraceNode[];
+      });
+
+export interface PageIndexCitation {
+    doc_id: string;
+    doc_title: string;
+    node_id: string;
+    pages: string;
+}
+
+export interface PageIndexStats {
+    seconds: number;
+    cost_usd: number;
+    model_calls: number;
+    tool_calls: number;
+    run_id?: string;
+}
+
+export interface PageIndexHandlers {
+    onTrace: (e: TraceEvent) => void;
+    onAnswer: (a: { answer: string; citations: PageIndexCitation[] }) => void;
+    onStats: (s: PageIndexStats) => void;
+    onError: (message: string) => void;
+}
+
+export async function listPageIndexCollections(): Promise<PageIndexCollection[]> {
+    try {
+        const response = await fetch(`${BFF_BASE}/pageindex/collections`);
+        return response.ok ? await response.json() : [];
+    } catch {
+        return [];
+    }
+}
+
+export async function listPageIndexRuns(): Promise<PageIndexRun[]> {
+    try {
+        const response = await fetch(`${BFF_BASE}/pageindex/runs`);
+        return response.ok ? await response.json() : [];
+    } catch {
+        return [];
+    }
+}
+
+async function consumePageIndexStream(response: Response, h: PageIndexHandlers): Promise<void> {
+    if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => ({}));
+        h.onError(data.error || `HTTP ${response.status}`);
+        return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let event = "";
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+            if (line.startsWith("event: ")) {
+                event = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+                let data;
+                try {
+                    data = JSON.parse(line.slice(6));
+                } catch {
+                    continue;
+                }
+                if (event === "Trace") h.onTrace(data);
+                else if (event === "Answer") h.onAnswer(data);
+                else if (event === "Stats") h.onStats(data);
+                else if (event === "Error") h.onError(data.error);
+            }
+        }
+    }
+}
+
+export async function queryPageIndex(
+    message: string,
+    collection: string,
+    handlers: PageIndexHandlers,
+): Promise<void> {
+    const form = new FormData();
+    form.append("message", message);
+    form.append("collection", collection);
+    const response = await fetch(`${BFF_BASE}/pageindex/query`, { method: "POST", body: form });
+    await consumePageIndexStream(response, handlers);
+}
+
+export async function replayPageIndexRun(
+    runId: string,
+    handlers: PageIndexHandlers,
+    speed = 1.5,
+): Promise<void> {
+    const form = new FormData();
+    form.append("run_id", runId);
+    form.append("speed", String(speed));
+    const response = await fetch(`${BFF_BASE}/pageindex/replay`, { method: "POST", body: form });
+    await consumePageIndexStream(response, handlers);
+}

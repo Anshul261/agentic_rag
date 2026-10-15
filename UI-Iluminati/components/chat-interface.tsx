@@ -50,7 +50,9 @@ import {
     ChevronDown,
     LogOut,
     Terminal,
+    Network,
 } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AgentTrace, type AgentTraceStep } from "@/components/agent-trace";
@@ -983,6 +985,15 @@ export function ChatInterface() {
                             Run
                         </button>
                     </div>
+
+                    <Link
+                        href="/pageindex"
+                        className="mt-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground hover:text-primary border border-sidebar-border rounded-sm px-2 py-1.5 transition-colors"
+                        title="Reasoning-based tree search over document collections"
+                    >
+                        <Network className="w-3 h-3 text-primary" />
+                        PageIndex · tree search
+                    </Link>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4">

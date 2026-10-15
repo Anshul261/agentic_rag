@@ -53,6 +53,19 @@ class DocTree(BaseModel):
     def get(self, node_id: str) -> Node | None:
         return next((n for n in self.walk() if n.node_id == node_id), None)
 
+    def path(self, node_id: str) -> list[Node]:
+        """Nodes from the top level down to node_id (inclusive); [] if not found."""
+
+        def find(nodes: list[Node], trail: list[Node]) -> list[Node]:
+            for n in nodes:
+                if n.node_id == node_id:
+                    return trail + [n]
+                if found := find(n.children, trail + [n]):
+                    return found
+            return []
+
+        return find(self.nodes, [])
+
     def outline(self, max_depth: int = 99, with_summaries: bool = True) -> str:
         """Compact ToC view: the thing the agent reasons over."""
         lines: list[str] = []

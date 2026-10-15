@@ -1389,6 +1389,11 @@ async def close_sandbox_endpoint(user_id: str = Depends(get_current_user_id)):
 
 app.include_router(custom_router)
 
+# PageIndex (reasoning-based tree RAG) with live search-trace streaming
+from pageindex_rag.api import router as pageindex_router  # noqa: E402
+
+app.include_router(pageindex_router, dependencies=[Depends(get_current_user_id)])
+
 # ============================================================================
 # Main
 # ============================================================================
