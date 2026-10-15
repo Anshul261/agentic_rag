@@ -3,6 +3,7 @@
     uv run -m pageindex_rag.cli index <file-or-folder> [...] [--collection NAME] [--no-llm] [--force]
     uv run -m pageindex_rag.cli show <doc_id> [--depth N]
     uv run -m pageindex_rag.cli docs [--collection NAME]
+    uv run -m pageindex_rag.cli ask "question" [--collection NAME] [--max-turns N]
 
 `index` runs the whole pipeline per file: parse (Docling, cached as tree.json)
 -> skip duplicates by title -> enrich (cheap LLM summaries + figure
@@ -130,6 +131,41 @@ def cmd_docs(args: argparse.Namespace) -> None:
         print(f"{doc_id}  {n_pages:3}p  {title[:90]}")
 
 
+async def _ask(args: argparse.Namespace) -> None:
+    import json
+
+    from agents import Runner
+
+    from .agent import build_agent, run_config
+    from .llm import LLM
+    from .store import Store
+    from .tools import ToolContext
+
+    llm = LLM()
+    ctx = ToolContext(store=Store(), collection=args.collection, data_dir=Path(args.out), llm=llm)
+    t = time.time()
+    result = Runner.run_streamed(build_agent(), args.question, context=ctx,
+                                 max_turns=args.max_turns, run_config=run_config())
+    async for ev in result.stream_events():
+        if ev.type == "run_item_stream_event" and ev.name == "tool_called":
+            raw = ev.item.raw_item
+            name = getattr(raw, "name", None) or raw.get("name")
+            arguments = getattr(raw, "arguments", None) or raw.get("arguments") or ""
+            print(f"  → {name}({arguments[:150]})")
+
+    answer = result.final_output
+    print(f"\n{answer.answer}\n")
+    for i, c in enumerate(answer.citations, 1):
+        print(f"  [{i}] {c.doc_title[:80]} — node {c.node_id}, p{c.pages}  ({c.doc_id})")
+    u = result.context_wrapper.usage
+    print(f"\n{time.time() - t:.0f}s · {u.requests} model calls · {u.input_tokens:,} in / {u.output_tokens:,} out tokens"
+          f" · figure calls ${llm.cost_usd:.4f}")
+
+
+def cmd_ask(args: argparse.Namespace) -> None:
+    asyncio.run(_ask(args))
+
+
 def main() -> None:
     logging.basicConfig(level=logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -149,6 +185,11 @@ def main() -> None:
     p = sub.add_parser("docs")
     p.add_argument("--collection", default="default")
     p.set_defaults(fn=cmd_docs)
+    p = sub.add_parser("ask")
+    p.add_argument("question")
+    p.add_argument("--collection", default="default")
+    p.add_argument("--max-turns", type=int, default=15)
+    p.set_defaults(fn=cmd_ask)
     args = ap.parse_args()
     args.fn(args)
 
