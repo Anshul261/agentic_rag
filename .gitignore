@@ -36,3 +36,5 @@ client_secret_398183445172-l83cj61nme1l06ml8oitlv2vvcb93lqd.apps.googleuserconte
 token.json
 *.db
 db_data/
+# pageindex_rag index output
+data/
