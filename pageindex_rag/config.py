@@ -28,6 +28,8 @@ class Settings:
     # full: the reasoning model reads raw section text.
     # extract: the cheap model reads sections and returns only evidence relevant to the focus.
     read_mode: str = field(default_factory=lambda: _env("PAGEINDEX_READ_MODE", "full"))
+    # Agent prompt variant, for A/B benchmarking (see agent.py)
+    prompt_version: str = field(default_factory=lambda: _env("PAGEINDEX_PROMPT", "v1"))
     llm_concurrency: int = 8
     summary_batch_tokens: int = 60_000  # rough token budget per summarize call
 

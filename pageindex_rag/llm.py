@@ -29,13 +29,15 @@ class LLM:
         self.calls += 1
         self.cost_usd += float(getattr(usage, "cost", 0) or 0)  # OpenRouter usage accounting
 
-    async def structured(self, model: str, system: str, user: str | list, schema: type[T]) -> T:
+    async def structured(self, model: str, system: str, user: str | list, schema: type[T],
+                         max_tokens: int = 8192) -> T:
         """One call constrained to a Pydantic schema (JSON-schema structured output)."""
         async with self._sem:
             resp = await self.client.chat.completions.parse(
                 model=model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 response_format=schema,
+                max_tokens=max_tokens,
                 extra_body={"usage": {"include": True}},
             )
         self._track(resp.usage)

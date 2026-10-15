@@ -1,0 +1,38 @@
+[
+ {
+  "q": "Which GNN architectures are used for financial fra",
+  "s": 30,
+  "req": 4,
+  "tools": 4,
+  "inp": 43302,
+  "cached": 38603,
+  "out": 840,
+  "cost": 0.0237,
+  "cites": 8,
+  "err": null
+ },
+ {
+  "q": "Which papers handle class imbalance with SMOTE or ",
+  "s": 84,
+  "req": 7,
+  "tools": 31,
+  "inp": 295234,
+  "cached": 227530,
+  "out": 4352,
+  "cost": 0.2352,
+  "cites": 34,
+  "err": null
+ },
+ {
+  "q": "List all the documents related to adversarial mach",
+  "s": 61,
+  "req": 6,
+  "tools": 32,
+  "inp": 304878,
+  "cached": 223708,
+  "out": 2633,
+  "cost": 0.2513,
+  "cites": 15,
+  "err": null
+ }
+]

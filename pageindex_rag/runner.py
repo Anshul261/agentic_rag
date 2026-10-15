@@ -13,6 +13,7 @@ from typing import Callable
 
 from agents import Runner
 from agents.exceptions import AgentsException
+from openai import APIError
 
 from .agent import Answer, build_agent, run_config
 from .llm import LLM
@@ -34,6 +35,11 @@ class RunReport:
     reasoning_tokens: int = 0
     cost_usd: float = 0.0  # agent model, billed
     tool_llm_cost_usd: float = 0.0  # figure-inspection calls inside tools
+    blocked_by_provider: bool = False  # model provider's own safety filter refused the request
+
+
+PROVIDER_REFUSAL = ("I can't help with that request. I can answer questions about the documents in "
+                    "this collection, including how the research describes attacks and defenses.")
 
 
 async def run_question(question: str, collection: str, data_dir: Path, store: Store | None = None,
@@ -56,6 +62,13 @@ async def run_question(question: str, collection: str, data_dir: Path, store: St
         report.answer = result.final_output
     except AgentsException as e:  # max turns, model behaviour errors, guardrails
         report.error = f"{type(e).__name__}: {e}"
+    except APIError as e:
+        if "flagged" in str(e).lower():
+            # Provider-side safety filter: answer with a refusal instead of failing the request.
+            report.blocked_by_provider = True
+            report.answer = Answer(answer=PROVIDER_REFUSAL, citations=[])
+        else:
+            report.error = f"{type(e).__name__}: {e}"
 
     report.seconds = time.time() - t
     u = result.context_wrapper.usage
